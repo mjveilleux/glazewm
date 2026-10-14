@@ -3,6 +3,7 @@ use std::{
   path::Path,
   str::FromStr,
   sync::{Arc, Mutex},
+  time::{Duration, Instant},
 };
 
 use anyhow::Context;
@@ -57,11 +58,18 @@ impl FromStr for TrayMenuId {
   }
 }
 
+/// How often to retry adding the tray icon while the taskbar isn't ready.
+const TRAY_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+
+/// How long to keep retrying before giving up on the tray icon.
+const TRAY_RETRY_TIMEOUT: Duration = Duration::from_secs(300);
+
 pub struct SystemTray {
   pub config_reload_rx: mpsc::UnboundedReceiver<()>,
   pub exit_rx: mpsc::UnboundedReceiver<()>,
   _icon_thread: Option<std::thread::JoinHandle<()>>,
-  _tray_icon: ThreadBound<TrayIcon>,
+  /// The tray icon, once it has been added (see `SystemTray::new`).
+  _tray_icon: Arc<Mutex<Option<ThreadBound<TrayIcon>>>>,
 }
 
 impl SystemTray {
@@ -92,14 +100,37 @@ impl SystemTray {
         .unwrap_or(false),
     ));
 
-    let tray_icon = dispatcher.dispatch_sync(|| {
-      let tray_icon = Self::create_tray_icon(
-        *animations_enabled.lock().unwrap(),
-        *run_on_startup_enabled.lock().unwrap(),
-      )
-      .unwrap();
-      ThreadBound::new(tray_icon, dispatcher.clone())
-    })?;
+    // The icon lives in the taskbar's notification area, so adding it
+    // fails while the taskbar doesn't exist yet (e.g. when launched at
+    // sign-in, before Explorer has started). Window management doesn't
+    // depend on it, so carry on without the icon and add it once the
+    // taskbar is up.
+    let tray_icon = Arc::new(Mutex::new(None));
+
+    match Self::add_tray_icon(
+      &dispatcher,
+      &animations_enabled,
+      &run_on_startup_enabled,
+    ) {
+      Ok(icon) => {
+        if let Ok(mut slot) = tray_icon.lock() {
+          *slot = Some(icon);
+        }
+      }
+      Err(err) => {
+        tracing::warn!(
+          "Failed to add tray icon, retrying until the taskbar is ready: {}",
+          err
+        );
+
+        Self::retry_add_tray_icon(
+          dispatcher.clone(),
+          animations_enabled.clone(),
+          run_on_startup_enabled.clone(),
+          tray_icon.clone(),
+        );
+      }
+    }
 
     // Spawn thread to handle tray menu events.
     let config_path = config_path.to_owned();
@@ -129,6 +160,73 @@ impl SystemTray {
       _icon_thread: Some(icon_thread),
       _tray_icon: tray_icon,
     })
+  }
+
+  /// Creates the tray icon on the event loop thread.
+  ///
+  /// Fails while the taskbar's notification area doesn't exist.
+  fn add_tray_icon(
+    dispatcher: &Dispatcher,
+    animations_enabled: &Arc<Mutex<bool>>,
+    run_on_startup_enabled: &Arc<Mutex<bool>>,
+  ) -> anyhow::Result<ThreadBound<TrayIcon>> {
+    let animations_enabled = animations_enabled
+      .lock()
+      .map(|value| *value)
+      .unwrap_or(false);
+    let run_on_startup_enabled = run_on_startup_enabled
+      .lock()
+      .map(|value| *value)
+      .unwrap_or(false);
+
+    dispatcher.dispatch_sync(|| {
+      Self::create_tray_icon(animations_enabled, run_on_startup_enabled)
+        .map(|icon| ThreadBound::new(icon, dispatcher.clone()))
+    })?
+  }
+
+  /// Retries adding the tray icon on a background thread until it
+  /// succeeds, the event loop stops, or `TRAY_RETRY_TIMEOUT` passes.
+  ///
+  /// Once added, the tray icon is restored by `tray_icon` itself whenever
+  /// Explorer restarts.
+  fn retry_add_tray_icon(
+    dispatcher: Dispatcher,
+    animations_enabled: Arc<Mutex<bool>>,
+    run_on_startup_enabled: Arc<Mutex<bool>>,
+    tray_icon: Arc<Mutex<Option<ThreadBound<TrayIcon>>>>,
+  ) {
+    std::thread::spawn(move || {
+      let started = Instant::now();
+
+      while started.elapsed() < TRAY_RETRY_TIMEOUT {
+        std::thread::sleep(TRAY_RETRY_INTERVAL);
+
+        if dispatcher.is_stopped() {
+          return;
+        }
+
+        if let Ok(icon) = Self::add_tray_icon(
+          &dispatcher,
+          &animations_enabled,
+          &run_on_startup_enabled,
+        ) {
+          if let Ok(mut slot) = tray_icon.lock() {
+            *slot = Some(icon);
+          }
+
+          tracing::info!(
+            "Added tray icon after {} ms.",
+            started.elapsed().as_millis()
+          );
+          return;
+        }
+      }
+
+      tracing::warn!(
+        "Gave up adding tray icon; the taskbar never became ready."
+      );
+    });
   }
 
   fn create_tray_icon(

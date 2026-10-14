@@ -438,6 +438,15 @@ impl Dispatcher {
       .map_err(crate::Error::ChannelRecv)
   }
 
+  /// Whether the event loop has stopped.
+  ///
+  /// Once stopped, `dispatch_sync` and `dispatch_async` return
+  /// `Error::EventLoopStopped`.
+  #[must_use]
+  pub fn is_stopped(&self) -> bool {
+    self.stopped.load(Ordering::SeqCst)
+  }
+
   /// Gets the thread ID of the event loop thread.
   #[allow(clippy::missing_panics_doc)]
   #[must_use]
