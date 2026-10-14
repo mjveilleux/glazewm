@@ -17,7 +17,9 @@ $root = Split-Path $PSScriptRoot
 Push-Location $root
 try {
     $env:VERSION_NUMBER = $Base
-    cargo build --release -p wm
+    # ui_access: the manifest asks for uiAccess (to manage windows of programs running as admin), as
+    # in upstream's releases; Windows grants it only to a signed copy in Program Files.
+    cargo build --release -p wm --features ui_access
     if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 
     $out = Join-Path $root "target\omawin\$Version"
