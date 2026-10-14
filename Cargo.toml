@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["packages/*"]
+# Patched dependencies (see [patch.crates-io] below) are not members.
+exclude = ["vendor"]
 default-members = ["packages/wm", "packages/wm-cli"]
 
 [workspace.dependencies]
@@ -24,3 +26,8 @@ wm-macros = { path = "packages/wm-macros" }
 clippy.all = { level = "warn", priority = -1 }
 clippy.pedantic = { level = "warn", priority = -1 }
 clippy.missing_errors_doc = "allow"
+
+# tray-icon with one fix (vendor/tray-icon, platform_impl/windows/mod.rs): a failed
+# TrayIcon::new destroys its window instead of leaving it to add a duplicate icon later.
+[patch.crates-io]
+tray-icon = { path = "vendor/tray-icon" }

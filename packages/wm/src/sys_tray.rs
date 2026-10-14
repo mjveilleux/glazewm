@@ -66,9 +66,9 @@ const TRAY_RETRY_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// How many times to try adding the tray icon once the taskbar is ready.
 ///
-/// Kept low because each failed attempt leaves a hidden window behind in
-/// `tray_icon`, which adds its own icon when the taskbar is next created.
-const TRAY_MAX_ATTEMPTS: u32 = 3;
+/// Explorer rejects icons for a moment after its notification area appears
+/// (e.g. at sign-in); attempts are 250 ms apart, so this allows 10 s.
+const TRAY_MAX_ATTEMPTS: u32 = 40;
 
 pub struct SystemTray {
   pub config_reload_rx: mpsc::UnboundedReceiver<()>,
