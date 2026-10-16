@@ -525,6 +525,45 @@ fn apply_window_effects(
     &window_effects.other_windows
   };
 
+  // Fullscreen windows cover the entire monitor, so DWM decorations
+  // (border color, rounded corners, transparency) would be drawn on top
+  // of them. Windows suppresses these for maximized windows, but not for
+  // windows that an app made fullscreen itself (e.g. F11 in a browser,
+  // fullscreen video). Any attributes previously set by GlazeWM would
+  // therefore remain visible and make the window not look fullscreen, so
+  // reset them here. `hide_title_bar` is still applied so title bars
+  // stay hidden.
+  #[cfg(target_os = "windows")]
+  if !should_apply_window_effects(&window.state()) {
+    if window_effects.focused_window.border.enabled
+      || window_effects.other_windows.border.enabled
+    {
+      _ = window.native().set_border_color(None);
+    }
+
+    if window_effects.focused_window.corner_style.enabled
+      || window_effects.other_windows.corner_style.enabled
+    {
+      _ = window.native().set_corner_style(&CornerStyle::Default);
+    }
+
+    if window_effects.focused_window.transparency.enabled
+      || window_effects.other_windows.transparency.enabled
+    {
+      _ = window
+        .native()
+        .set_transparency(&OpacityValue::from_alpha(u8::MAX));
+    }
+
+    if window_effects.focused_window.hide_title_bar.enabled
+      || window_effects.other_windows.hide_title_bar.enabled
+    {
+      apply_hide_title_bar_effect(window, effect_config);
+    }
+
+    return;
+  }
+
   // Skip if both focused + non-focused window effects are disabled.
   #[cfg(target_os = "windows")]
   if window_effects.focused_window.border.enabled
@@ -552,6 +591,54 @@ fn apply_window_effects(
     || window_effects.other_windows.transparency.enabled
   {
     apply_transparency_effect(window, effect_config);
+  }
+}
+
+/// Whether DWM window effects (border color, corner style, transparency)
+/// should be applied to a window in the given state.
+///
+/// Effects are skipped for fullscreen windows, since they cover the entire
+/// monitor and should not show any border or rounded corners.
+#[cfg(target_os = "windows")]
+fn should_apply_window_effects(state: &WindowState) -> bool {
+  !matches!(state, WindowState::Fullscreen(_))
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+  use wm_common::{
+    FloatingStateConfig, FullscreenStateConfig, WindowState,
+  };
+
+  use super::should_apply_window_effects;
+
+  #[test]
+  fn skips_effects_for_fullscreen_windows() {
+    let fullscreen = WindowState::Fullscreen(FullscreenStateConfig {
+      maximized: false,
+      shown_on_top: false,
+    });
+    assert!(!should_apply_window_effects(&fullscreen));
+
+    let maximized_fullscreen =
+      WindowState::Fullscreen(FullscreenStateConfig {
+        maximized: true,
+        shown_on_top: false,
+      });
+    assert!(!should_apply_window_effects(&maximized_fullscreen));
+  }
+
+  #[test]
+  fn applies_effects_for_non_fullscreen_windows() {
+    assert!(should_apply_window_effects(&WindowState::Tiling));
+
+    let floating = WindowState::Floating(FloatingStateConfig {
+      centered: true,
+      shown_on_top: false,
+    });
+    assert!(should_apply_window_effects(&floating));
+
+    assert!(should_apply_window_effects(&WindowState::Minimized));
   }
 }
 
