@@ -17,6 +17,9 @@ $root = Split-Path $PSScriptRoot
 Push-Location $root
 try {
     $env:VERSION_NUMBER = $Base
+    # Paths baked into the binary (panic messages, crates from ~/.cargo) name whoever built it:
+    # remapped to neutral ones. The last matching prefix wins, so the checkout comes after home.
+    $env:RUSTFLAGS = "--remap-path-prefix=$HOME=~ --remap-path-prefix=$root=glazewm"
     # ui_access: the manifest asks for uiAccess (to manage windows of programs running as admin), as
     # in upstream's releases; Windows grants it only to a signed copy in Program Files.
     cargo build --release -p wm --features ui_access
