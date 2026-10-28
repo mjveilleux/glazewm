@@ -31,6 +31,9 @@ general:
 gaps:
   inner_gap: '10px'
   outer_gap: { top: '10px', right: '10px', bottom: '10px', left: '10px' }
+workspaces:
+  - name: '1'
+  - name: '2'
 animations:
   window_move:
     effect_type: 'slide'

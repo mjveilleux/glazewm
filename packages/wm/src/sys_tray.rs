@@ -80,10 +80,7 @@ pub struct SystemTray {
 
 impl SystemTray {
   /// Install the system tray on the main thread after the run loop starts.
-  pub fn new(
-    config_path: &Path,
-    dispatcher: Dispatcher,
-  ) -> anyhow::Result<Self> {
+  pub fn new(config_path: &Path, dispatcher: Dispatcher) -> Self {
     let (exit_tx, exit_rx) = mpsc::unbounded_channel();
     let (config_reload_tx, config_reload_rx) = mpsc::unbounded_channel();
 
@@ -169,12 +166,12 @@ impl SystemTray {
       }
     });
 
-    Ok(Self {
+    Self {
       config_reload_rx,
       exit_rx,
       _icon_thread: Some(icon_thread),
       _tray_icon: tray_icon,
-    })
+    }
   }
 
   /// Creates the tray icon on the event loop thread.
@@ -185,14 +182,10 @@ impl SystemTray {
     animations_enabled: &Arc<Mutex<bool>>,
     run_on_startup_enabled: &Arc<Mutex<bool>>,
   ) -> anyhow::Result<ThreadBound<TrayIcon>> {
-    let animations_enabled = animations_enabled
-      .lock()
-      .map(|value| *value)
-      .unwrap_or(false);
-    let run_on_startup_enabled = run_on_startup_enabled
-      .lock()
-      .map(|value| *value)
-      .unwrap_or(false);
+    let animations_enabled =
+      animations_enabled.lock().is_ok_and(|value| *value);
+    let run_on_startup_enabled =
+      run_on_startup_enabled.lock().is_ok_and(|value| *value);
 
     dispatcher.dispatch_sync(|| {
       Self::create_tray_icon(animations_enabled, run_on_startup_enabled)

@@ -7,7 +7,7 @@ name: Animation check
 on:
   push:
     branches: ['claude/**', 'omawin']
-    paths: ['packages/**', 'scripts/animation-check.ps1', '.github/workflows/animation-check.yaml']
+    paths: ['packages/**', 'scripts/animation-*', '.github/workflows/animation-check.yaml']
   workflow_dispatch:
     inputs:
       duration_ms:
