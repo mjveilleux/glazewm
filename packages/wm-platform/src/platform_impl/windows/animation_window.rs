@@ -6,6 +6,7 @@ use windows::{
   Graphics::{
     Capture::{
       Direct3D11CaptureFrame, Direct3D11CaptureFramePool,
+      GraphicsCaptureAccess, GraphicsCaptureAccessKind,
       GraphicsCaptureItem, GraphicsCaptureSession,
     },
     DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat},
@@ -69,6 +70,8 @@ pub(crate) struct AnimationContext {
 impl AnimationContext {
   /// Implements [`AnimationContext::new`].
   pub(crate) fn new(dispatcher: &Dispatcher) -> crate::Result<Self> {
+    Self::request_borderless_capture();
+
     dispatcher.dispatch_sync(|| {
       COM_INIT.with(|_| {
         if !GraphicsCaptureSession::IsSupported()? {
@@ -124,6 +127,30 @@ impl AnimationContext {
         Ok(result)
       })
     })?
+  }
+
+  /// Asks Windows to capture windows without the yellow border it
+  /// otherwise draws around a captured window, which would flash on every
+  /// window as its animation starts.
+  ///
+  /// Windows grants this to desktop apps when asked. It's only asked once
+  /// per process, off the event loop thread since it waits for the answer.
+  /// Windows versions without the request draw no border to begin with.
+  fn request_borderless_capture() {
+    static REQUESTED: Once = Once::new();
+
+    REQUESTED.call_once(|| {
+      COM_INIT.with(|_| {
+        let status = GraphicsCaptureAccess::RequestAccessAsync(
+          GraphicsCaptureAccessKind::Borderless,
+        )
+        .and_then(|operation| operation.get());
+
+        if let Err(err) = status {
+          tracing::debug!("Borderless capture not available: {err}");
+        }
+      });
+    });
   }
 
   /// Creates a D3D11 device.
