@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use anyhow::{bail, Context};
 use tokio::sync::mpsc::{self};
 use tracing::warn;
@@ -48,6 +50,10 @@ use crate::{
   user_config::UserConfig,
   wm_state::WmState,
 };
+
+/// How long a new window must stay before the others make room for it
+/// (see `WindowManager::should_settle`).
+const SETTLE_DELAY: Duration = Duration::from_millis(100);
 
 pub struct WindowManager {
   pub event_rx: mpsc::UnboundedReceiver<WmEvent>,
@@ -144,7 +150,69 @@ impl WindowManager {
     }?;
 
     if !state.is_paused && state.pending_sync.has_changes() {
-      platform_sync(state, config)?;
+      if state.settle_deadline.is_some() {
+        // Synced with the rest when the settle ends.
+      } else if Self::should_settle(state, config) {
+        state.settle_deadline = Some(Instant::now() + SETTLE_DELAY);
+      } else {
+        platform_sync(state, config)?;
+      }
+    }
+
+    Ok(())
+  }
+
+  /// Whether to hold back a sync until the layout settles.
+  ///
+  /// A new window makes the others slide aside. Apps often show a window
+  /// for a split second (a splash screen, the console of a launcher), and
+  /// their slide aside and back is motion for nothing. Held back briefly,
+  /// a window that's already gone again moves nothing.
+  ///
+  /// Only while new windows stay hidden until placed, or they'd show
+  /// where their app put them for longer.
+  // LINT: `state` and `config` are only used on Windows.
+  #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+  fn should_settle(state: &WmState, config: &UserConfig) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+      !state.pending_sync.open_animation_windows().is_empty()
+        && config.value.animations.window_move.is_some()
+        && crate::animation_manager::hides_new_windows(config)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    false
+  }
+
+  /// Runs the sync a settle held back, once it's due.
+  pub fn end_settle(&mut self, config: &UserConfig) -> anyhow::Result<()> {
+    self.state.settle_deadline = None;
+
+    // Animations that finished meanwhile were left at their end, so they
+    // end now, with the same sync.
+    let completed_ids = {
+      let manager = &mut self.state.animation_manager;
+      let mut ids = manager.completed_slide_ids();
+      ids.extend(manager.take_completed_fade_ids());
+
+      for id in &ids {
+        manager.cancel_animation(id);
+      }
+
+      ids
+    };
+
+    let windows = self
+      .state
+      .windows()
+      .into_iter()
+      .filter(|window| completed_ids.contains(&window.id()));
+
+    self.state.pending_sync.queue_containers_to_redraw(windows);
+
+    if !self.state.is_paused && self.state.pending_sync.has_changes() {
+      platform_sync(&mut self.state, config)?;
     }
 
     Ok(())
@@ -159,6 +227,13 @@ impl WindowManager {
       .state
       .animation_manager
       .tick_update(&self.state.dispatcher)?;
+
+    // A sync now would take the held back changes along, without their
+    // animations. Finished animations stay at their end until the settle
+    // is over.
+    if self.state.settle_deadline.is_some() {
+      return Ok(());
+    }
 
     let completed_ids = {
       let manager = &mut self.state.animation_manager;

@@ -636,9 +636,9 @@ impl AnimationManager {
 
     anim_window.resize(outer_rect)?;
 
-    // Immediately redraw the animation after resizing. The animation is
-    // scaled relative to the window's frame, so it would otherwise be
-    // incorrect until the next tick.
+    // Immediately redraw the animation after resizing. It's positioned
+    // relative to the overlay's frame, so it would otherwise be incorrect
+    // until the next tick.
     let anim_window = &*anim_window;
     self
       .context

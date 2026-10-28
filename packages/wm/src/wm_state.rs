@@ -37,6 +37,11 @@ pub struct WmState {
 
   pub pending_sync: PendingSync,
 
+  /// When a sync held back for a new window is due (see
+  /// `WindowManager::process_event`). Changes collect in `pending_sync`
+  /// until then.
+  pub settle_deadline: Option<Instant>,
+
   /// Manager for window animations.
   pub animation_manager: AnimationManager,
 
@@ -92,6 +97,7 @@ impl WmState {
       animation_manager: AnimationManager::new(&dispatcher),
       dispatcher,
       pending_sync: PendingSync::default(),
+      settle_deadline: None,
       prev_effects_window: None,
       recent_workspace_name: None,
       unmanaged_or_minimized_timestamp: None,

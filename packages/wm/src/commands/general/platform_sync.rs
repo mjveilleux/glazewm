@@ -23,6 +23,9 @@ pub fn platform_sync(
   state: &mut WmState,
   config: &UserConfig,
 ) -> anyhow::Result<()> {
+  // Any sync takes along the changes a settle was holding back.
+  state.settle_deadline = None;
+
   let focused_container =
     state.focused_container().context("No focused container.")?;
 

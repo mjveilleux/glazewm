@@ -227,6 +227,11 @@ async fn start_wm(
       Some(()) = wm.state.animation_manager.tick_rx.recv() => {
         wm.update_animations(&config)
       },
+      () = tokio::time::sleep_until(tokio::time::Instant::from_std(
+        wm.state.settle_deadline.unwrap_or_else(std::time::Instant::now),
+      )), if wm.state.settle_deadline.is_some() => {
+        wm.end_settle(&config)
+      },
       Some((
         message,
         response_tx,

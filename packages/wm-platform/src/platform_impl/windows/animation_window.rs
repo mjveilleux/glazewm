@@ -17,17 +17,22 @@ use windows::{
       Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0},
       Direct3D11::{
         D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
-        ID3D11Texture2D, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-        D3D11_SDK_VERSION,
+        ID3D11Texture2D, D3D11_BOX, D3D11_CPU_ACCESS_READ,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE,
+        D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+        D3D11_USAGE_STAGING,
       },
       DirectComposition::{
         DCompositionCreateDevice2, IDCompositionDesktopDevice,
-        IDCompositionScaleTransform, IDCompositionSurface,
-        IDCompositionTarget, IDCompositionVisual3,
+        IDCompositionRectangleClip, IDCompositionScaleTransform,
+        IDCompositionSurface, IDCompositionTarget, IDCompositionVisual,
+        IDCompositionVisual3,
+        DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
       },
       Dxgi::{
         Common::{
           DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
+          DXGI_SAMPLE_DESC,
         },
         IDXGIDevice,
       },
@@ -139,19 +144,31 @@ impl AnimationContext {
   fn request_borderless_capture() {
     static REQUESTED: Once = Once::new();
 
+    // On a thread of its own, so its COM state is torn down when the
+    // thread ends. Kept on the calling (main) thread, it was only
+    // released as the process exited, from a TLS destructor, which
+    // stalled the exit.
     REQUESTED.call_once(|| {
-      COM_INIT.with(|_| match GraphicsCaptureAccess::RequestAccessAsync(
-        GraphicsCaptureAccessKind::Borderless,
-      )
-      .and_then(|operation| operation.get())
-      {
-        Ok(status) => {
-          tracing::info!("Borderless capture access: {}.", status.0);
-        }
-        Err(err) => {
-          tracing::info!("Borderless capture not available: {err}");
-        }
+      let request = std::thread::spawn(|| {
+        COM_INIT.with(
+          |_| match GraphicsCaptureAccess::RequestAccessAsync(
+            GraphicsCaptureAccessKind::Borderless,
+          )
+          .and_then(|operation| operation.get())
+          {
+            Ok(status) => {
+              tracing::info!("Borderless capture access: {}.", status.0);
+            }
+            Err(err) => {
+              tracing::info!("Borderless capture not available: {err}");
+            }
+          },
+        );
       });
+
+      if request.join().is_err() {
+        tracing::warn!("Borderless capture request panicked.");
+      }
     });
   }
 
@@ -194,15 +211,26 @@ impl AnimationContext {
 
 unsafe impl Sync for AnimationContext {}
 
+/// Side of the square surface that fills an overlay where the snapshot
+/// doesn't reach. It's scaled to the window's size each frame.
+const FILL_SIZE: u32 = 16;
+
 /// Platform-specific implementation of [`AnimationWindow`].
+///
+/// The snapshot is never stretched: it's drawn at its own size and cut to
+/// the window's current rect, like a window being resized. Where the rect
+/// is larger than the snapshot, a fill in the color at the window's edge
+/// shows instead.
 pub(crate) struct AnimationWindow {
   handle: isize,
   dcomp_device: ThreadBound<IDCompositionDesktopDevice>,
   _dcomp_target: ThreadBound<IDCompositionTarget>,
-  dcomp_visual: ThreadBound<IDCompositionVisual3>,
-  scale_transform: ThreadBound<IDCompositionScaleTransform>,
-  /// Frame of the screen capture (for scale calculations).
-  src_inner_rect: Rect,
+  /// Holds the fill and the snapshot; moved to the window's current rect
+  /// and clipped to its size.
+  root_visual: ThreadBound<IDCompositionVisual3>,
+  clip: ThreadBound<IDCompositionRectangleClip>,
+  /// Scales the fill to the window's current size.
+  fill_scale: ThreadBound<IDCompositionScaleTransform>,
   /// Frame of the `AnimationWindow`.
   outer_rect: Rect,
   dispatcher: Dispatcher,
@@ -292,38 +320,81 @@ impl AnimationWindow {
           )?
         };
 
+        let d3d_context = context.d3d_context.get_ref()?;
+
         Self::copy_texture_to_surface(
-          context.d3d_context.get_ref()?,
+          d3d_context,
           captured.texture()?,
           &dcomp_surface,
         )?;
 
-        let dcomp_visual: IDCompositionVisual3 =
+        // A failed sample only costs the fill its color.
+        let fill_color =
+          Self::edge_color(d3d_context, captured.texture()?)
+            .unwrap_or_else(|err| {
+              tracing::debug!("Failed to sample window edge color: {err}");
+              [0; 4]
+            });
+
+        let fill_surface = unsafe {
+          dcomp_device.CreateSurface(
+            FILL_SIZE,
+            FILL_SIZE,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_ALPHA_MODE_PREMULTIPLIED,
+          )?
+        };
+
+        Self::fill_surface(d3d_context, &fill_surface, fill_color)?;
+
+        let root_visual: IDCompositionVisual3 =
+          unsafe { dcomp_device.CreateVisual()?.cast()? };
+        let fill_visual: IDCompositionVisual3 =
+          unsafe { dcomp_device.CreateVisual()?.cast()? };
+        let snapshot_visual: IDCompositionVisual3 =
           unsafe { dcomp_device.CreateVisual()?.cast()? };
 
+        let clip = unsafe { dcomp_device.CreateRectangleClip()? };
+        let fill_scale = unsafe { dcomp_device.CreateScaleTransform()? };
+
         unsafe {
-          dcomp_visual.SetContent(&dcomp_surface)?;
-          dcomp_target.SetRoot(&dcomp_visual)?;
+          // Nearest neighbor, so the scaled fill keeps hard edges instead
+          // of blending into transparency.
+          fill_visual.SetBitmapInterpolationMode(
+            DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+          )?;
+          fill_visual.SetContent(&fill_surface)?;
+          fill_visual.SetTransform(&fill_scale)?;
+          snapshot_visual.SetContent(&dcomp_surface)?;
+
+          clip.SetLeft2(0.0)?;
+          clip.SetTop2(0.0)?;
+          root_visual.SetClip(&clip)?;
+
+          let fill_visual: IDCompositionVisual = fill_visual.cast()?;
+          root_visual.AddVisual(
+            &fill_visual,
+            false,
+            None::<&IDCompositionVisual>,
+          )?;
+          root_visual.AddVisual(&snapshot_visual, true, &fill_visual)?;
+
+          dcomp_target.SetRoot(&root_visual)?;
         }
 
-        let scale_transform =
-          unsafe { dcomp_device.CreateScaleTransform()? };
-
-        unsafe { dcomp_visual.SetTransform(&scale_transform)? };
-
-        let dcomp_visual =
-          ThreadBound::new(dcomp_visual, dispatcher.clone());
-        let scale_transform =
-          ThreadBound::new(scale_transform, dispatcher.clone());
+        let root_visual =
+          ThreadBound::new(root_visual, dispatcher.clone());
+        let clip = ThreadBound::new(clip, dispatcher.clone());
+        let fill_scale = ThreadBound::new(fill_scale, dispatcher.clone());
         let dcomp_target =
           ThreadBound::new(dcomp_target, dispatcher.clone());
 
         context.transaction(
           || {
             Self::update_visual(
-              dcomp_visual.get_ref()?,
-              scale_transform.get_ref()?,
-              inner_rect,
+              root_visual.get_ref()?,
+              clip.get_ref()?,
+              fill_scale.get_ref()?,
               inner_rect,
               outer_rect,
               opacity.as_ref(),
@@ -336,9 +407,9 @@ impl AnimationWindow {
           handle,
           dcomp_device: context.dcomp_device.clone(),
           _dcomp_target: dcomp_target,
-          dcomp_visual,
-          scale_transform,
-          src_inner_rect: inner_rect.clone(),
+          root_visual,
+          clip,
+          fill_scale,
           outer_rect: outer_rect.clone(),
           dispatcher: dispatcher.clone(),
         })
@@ -372,9 +443,9 @@ impl AnimationWindow {
   ) -> crate::Result<()> {
     self.dispatcher.dispatch_sync(|| {
       Self::update_visual(
-        self.dcomp_visual.get_ref()?,
-        self.scale_transform.get_ref()?,
-        &self.src_inner_rect,
+        self.root_visual.get_ref()?,
+        self.clip.get_ref()?,
+        self.fill_scale.get_ref()?,
         inner_rect,
         &self.outer_rect,
         opacity,
@@ -382,44 +453,156 @@ impl AnimationWindow {
     })?
   }
 
-  /// Updates the `IDCompositionVisual3` position and opacity within the
-  /// window.
+  /// Moves the visuals to the window's current rect within the overlay,
+  /// and cuts them to its size.
   ///
-  /// The window's frame isn't changed; only the visual with the screen
-  /// capture is updated.
+  /// The window's frame isn't changed; only the visuals are updated.
   ///
   /// Shared by [`AnimationWindow::new`] and [`AnimationWindow::update`].
   /// Must be called inside `AnimationContext::transaction`.
+  #[allow(clippy::cast_precision_loss)]
   fn update_visual(
-    dcomp_visual: &IDCompositionVisual3,
-    scale_transform: &IDCompositionScaleTransform,
-    src_inner_rect: &Rect,
+    root_visual: &IDCompositionVisual3,
+    clip: &IDCompositionRectangleClip,
+    fill_scale: &IDCompositionScaleTransform,
     inner_rect: &Rect,
     outer_rect: &Rect,
     opacity: Option<&OpacityValue>,
   ) -> crate::Result<()> {
-    #[allow(clippy::cast_precision_loss)]
-    unsafe {
-      dcomp_visual
-        .SetOffsetX2((inner_rect.x() - outer_rect.x()) as f32)?;
-      dcomp_visual
-        .SetOffsetY2((inner_rect.y() - outer_rect.y()) as f32)?;
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    let scale_x =
-      inner_rect.width() as f32 / src_inner_rect.width() as f32;
-    #[allow(clippy::cast_precision_loss)]
-    let scale_y =
-      inner_rect.height() as f32 / src_inner_rect.height() as f32;
+    let width = inner_rect.width() as f32;
+    let height = inner_rect.height() as f32;
 
     unsafe {
-      scale_transform.SetScaleX2(scale_x)?;
-      scale_transform.SetScaleY2(scale_y)?;
+      root_visual.SetOffsetX2((inner_rect.x() - outer_rect.x()) as f32)?;
+      root_visual.SetOffsetY2((inner_rect.y() - outer_rect.y()) as f32)?;
+
+      clip.SetRight2(width)?;
+      clip.SetBottom2(height)?;
+
+      fill_scale.SetScaleX2(width / FILL_SIZE as f32)?;
+      fill_scale.SetScaleY2(height / FILL_SIZE as f32)?;
     }
 
     if let Some(opacity) = opacity {
-      unsafe { dcomp_visual.SetOpacity2(opacity.0)? };
+      unsafe { root_visual.SetOpacity2(opacity.0)? };
+    }
+
+    Ok(())
+  }
+
+  /// Reads the color of the window near its bottom right corner, the
+  /// part a larger rect uncovers.
+  ///
+  /// Sampled a little inside the edge, past the rounded corner and border.
+  fn edge_color(
+    context: &ID3D11DeviceContext,
+    texture: &ID3D11Texture2D,
+  ) -> crate::Result<[u8; 4]> {
+    const INSET: u32 = 12;
+
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { texture.GetDesc(&raw mut desc) };
+
+    let x = desc.Width.saturating_sub(INSET);
+    let y = desc.Height.saturating_sub(INSET);
+
+    #[allow(clippy::cast_sign_loss)]
+    let staging_desc = D3D11_TEXTURE2D_DESC {
+      Width: 1,
+      Height: 1,
+      MipLevels: 1,
+      ArraySize: 1,
+      Format: desc.Format,
+      SampleDesc: DXGI_SAMPLE_DESC {
+        Count: 1,
+        Quality: 0,
+      },
+      Usage: D3D11_USAGE_STAGING,
+      BindFlags: 0,
+      CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+      MiscFlags: 0,
+    };
+
+    let device = unsafe { context.GetDevice()? };
+    let mut staging: Option<ID3D11Texture2D> = None;
+    unsafe {
+      device.CreateTexture2D(
+        &raw const staging_desc,
+        None,
+        Some(&raw mut staging),
+      )?;
+    }
+    let staging = staging.ok_or_else(|| {
+      crate::Error::Platform("No staging texture.".to_string())
+    })?;
+
+    let pixel = D3D11_BOX {
+      left: x,
+      top: y,
+      front: 0,
+      right: x + 1,
+      bottom: y + 1,
+      back: 1,
+    };
+
+    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+
+    unsafe {
+      context.CopySubresourceRegion(
+        &staging,
+        0,
+        0,
+        0,
+        0,
+        texture,
+        0,
+        Some(&raw const pixel),
+      );
+      context.Map(
+        &staging,
+        0,
+        D3D11_MAP_READ,
+        0,
+        Some(&raw mut mapped),
+      )?;
+      let color = *mapped.pData.cast::<[u8; 4]>();
+      context.Unmap(&staging, 0);
+      Ok(color)
+    }
+  }
+
+  /// Fills a surface with one color (premultiplied BGRA, as captured).
+  fn fill_surface(
+    context: &ID3D11DeviceContext,
+    surface: &IDCompositionSurface,
+    color: [u8; 4],
+  ) -> crate::Result<()> {
+    let pixels = vec![color; (FILL_SIZE * FILL_SIZE) as usize];
+    let mut offset = POINT::default();
+
+    let texture: ID3D11Texture2D =
+      unsafe { surface.BeginDraw(None, &raw mut offset)? };
+
+    #[allow(clippy::cast_sign_loss)]
+    let area = D3D11_BOX {
+      left: offset.x as u32,
+      top: offset.y as u32,
+      front: 0,
+      right: offset.x as u32 + FILL_SIZE,
+      bottom: offset.y as u32 + FILL_SIZE,
+      back: 1,
+    };
+
+    unsafe {
+      context.UpdateSubresource(
+        &texture,
+        0,
+        Some(&raw const area),
+        pixels.as_ptr().cast(),
+        FILL_SIZE * 4,
+        0,
+      );
+      surface.EndDraw()?;
     }
 
     Ok(())
@@ -430,11 +613,12 @@ impl AnimationWindow {
     self.dispatcher.dispatch_sync(|| {
       COM_INIT.with(|_| {
         unsafe {
-          // Clear the surface so that the compositor releases the GPU
+          // Clear the visuals so that the compositor releases the GPU
           // resources on the next commit.
-          if let Err(err) = self.dcomp_visual.with(|dcomp_visual| {
-            dcomp_visual.SetContent(None::<&windows::core::IUnknown>)
-          }) {
+          if let Err(err) = self
+            .root_visual
+            .with(|root_visual| root_visual.RemoveAllVisuals())
+          {
             tracing::warn!("Failed to clear DComp visual content: {err}");
           }
 
