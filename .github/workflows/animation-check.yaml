@@ -36,17 +36,26 @@ jobs:
         shell: bash
         run: cargo build --locked --release -p wm -p wm-cli
 
-      - name: Record animations
+      - name: Record animations (slowed)
         shell: pwsh
         run: ./scripts/animation-check.ps1 -DurationMs ${{ inputs.duration_ms || '600' }}
 
-      - name: Contact sheets
+      # Again at omawin's own timings (glazewm/config.yaml there), for a video at real speed.
+      - name: Record animations (real speed)
+        if: always()
+        shell: pwsh
+        run: ./scripts/animation-check.ps1 -Out out-real -DurationMs 200 -OpenMs 150
+
+      - name: Contact sheets and videos
         if: always()
         shell: bash
         run: |
-          python -m pip install --quiet pillow
+          python -m pip install --quiet pillow imageio-ffmpeg
           mkdir -p results
           if [ -d out/frames ]; then python scripts/animation-sheets.py out results/sheets 16; fi
+          if [ -d out/frames ]; then python scripts/animation-video.py out results/slowed.mp4 'slowed: 600 ms'; fi
+          if [ -d out-real/frames ]; then python scripts/animation-video.py out-real results/real-speed.mp4 'real speed: 200 ms slides, 150 ms fade'; fi
+          if [ -d out-real/frames ]; then python scripts/animation-video.py out-real results/real-speed-half.mp4 'real speed, played at half speed' 0.5; fi
           cp out/*.txt out/*.log out/*.json out/config.yaml results/ 2>/dev/null || true
 
       - name: Publish to ci/animation-check
@@ -69,5 +78,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: animation-check
-          path: out/
+          path: |
+            out/
+            out-real/
           retention-days: 7

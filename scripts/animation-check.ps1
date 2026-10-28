@@ -14,9 +14,12 @@
 param(
     [string]$Bin = 'target\release',
     [string]$Out = 'out',
-    [int]$DurationMs = 600
+    [int]$DurationMs = 600,
+    # The fade-in of new windows; the same as the slides when left out.
+    [int]$OpenMs = 0
 )
 $ErrorActionPreference = 'Stop'
+if ($OpenMs -le 0) { $OpenMs = $DurationMs }
 
 New-Item -ItemType Directory -Force "$Out\frames" | Out-Null
 $Out = (Resolve-Path $Out).Path
@@ -42,7 +45,7 @@ animations:
     trigger_threshold: '10px'
   window_open:
     effect_type: 'fade'
-    duration_ms: $DurationMs
+    duration_ms: $OpenMs
     easing: 'ease_out_cubic'
 "@ | Set-Content $config -Encoding utf8
 
