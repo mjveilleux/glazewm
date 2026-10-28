@@ -1,7 +1,9 @@
 name: Animation check
 
 # Runs GlazeWM with window animations on a Windows desktop, records the screen while windows
-# open, close and reflow, and uploads the frames (scripts/animation-check.ps1).
+# open, close and reflow, and uploads the frames (scripts/animation-check.ps1). The contact
+# sheets (one image per step), checks and logs also go to the branch ci/animation-check, so
+# they can be read with git alone.
 on:
   push:
     branches: ['claude/**', 'omawin']
@@ -11,6 +13,9 @@ on:
       duration_ms:
         description: Animation duration (slowed so the recording catches several frames).
         default: '600'
+
+permissions:
+  contents: write
 
 jobs:
   check:
@@ -34,6 +39,30 @@ jobs:
       - name: Record animations
         shell: pwsh
         run: ./scripts/animation-check.ps1 -DurationMs ${{ inputs.duration_ms || '600' }}
+
+      - name: Contact sheets
+        if: always()
+        shell: bash
+        run: |
+          python -m pip install --quiet pillow
+          mkdir -p results
+          if [ -d out/frames ]; then python scripts/animation-sheets.py out results/sheets 16; fi
+          cp out/*.txt out/*.log out/*.json out/config.yaml results/ 2>/dev/null || true
+
+      - name: Publish to ci/animation-check
+        if: always()
+        shell: bash
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          cd results
+          git init -q
+          git checkout -q -b ci/animation-check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -q -m "Animation check: run ${{ github.run_id }} on ${{ github.sha }}"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}" ci/animation-check
 
       - name: Upload recording
         if: always()

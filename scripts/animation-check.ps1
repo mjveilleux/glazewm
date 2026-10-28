@@ -30,7 +30,7 @@ general:
   hide_method: 'cloak'
 gaps:
   inner_gap: '10px'
-  outer_gap: '10px'
+  outer_gap: { top: '10px', right: '10px', bottom: '10px', left: '10px' }
 animations:
   window_move:
     effect_type: 'slide'
@@ -70,11 +70,31 @@ while ([DateTimeOffset]::UtcNow -lt $end) {
 }
 '@ | Set-Content $recorder -Encoding utf8
 
+# GlazeWM's own output, in the job's log: what went wrong is there when a step fails.
+function Show-Logs {
+    foreach ($log in "$Out\glazewm.log", "$Out\glazewm-err.log", "$HOME\.glzr\glazewm\errors.log") {
+        if (Test-Path $log) { Write-Host "--- $log (last 60 lines)"; Get-Content $log -Tail 60 | Write-Host }
+    }
+}
+
 Write-Event 'start glazewm'
+Write-Host "session $([Diagnostics.Process]::GetCurrentProcess().SessionId), interactive $([Environment]::UserInteractive), explorer $([bool](Get-Process explorer -ErrorAction SilentlyContinue))"
 $wm = Start-Process $glazewm -ArgumentList 'start', '--config', "`"$config`"", '--verbose' -PassThru `
     -RedirectStandardOutput "$Out\glazewm.log" -RedirectStandardError "$Out\glazewm-err.log"
-Start-Sleep -Seconds 4
-if ($wm.HasExited) { throw "glazewm exited with code $($wm.ExitCode)" }
+# Up once its IPC server answers (a config error leaves it waiting on a dialog instead).
+$ready = $false
+foreach ($i in 1..30) {
+    Start-Sleep -Milliseconds 500
+    if ($wm.HasExited) { break }
+    & $cli query monitors *> $null
+    if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+}
+if (-not $ready) {
+    Show-Logs
+    if (-not $wm.HasExited) { $wm | Stop-Process }
+    throw 'GlazeWM did not start (see its logs above).'
+}
+Write-Event 'glazewm ready'
 
 $rec = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "`"$recorder`"", "`"$Out\frames`"", $start, 30 -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 1
@@ -151,8 +171,10 @@ $lines | Set-Content "$Out\checks.txt"
 $lines | Write-Host
 
 $notepads | Where-Object { -not $_.HasExited } | Stop-Process -ErrorAction SilentlyContinue
-& $cli command wm-exit 2>$null | Out-Null
+& $cli command wm-exit *> $null
 Start-Sleep -Seconds 2
 if (-not $wm.HasExited) { $wm | Stop-Process }
 Copy-Item "$HOME\.glzr\glazewm\errors.log" $Out -ErrorAction SilentlyContinue
+Show-Logs
 if ($failed) { Write-Host 'A check failed: see checks.txt'; exit 1 }
+exit 0
