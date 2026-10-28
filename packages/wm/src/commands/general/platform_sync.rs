@@ -6,13 +6,13 @@ use wm_common::{
   WindowState, WmEvent,
 };
 #[cfg(target_os = "windows")]
-use wm_platform::NativeWindowWindowsExt;
+use wm_platform::CornerStyle;
 #[cfg(target_os = "windows")]
-use wm_platform::{CornerStyle, OpacityValue};
-use wm_platform::{Rect, WindowZOrder};
+use wm_platform::NativeWindowWindowsExt;
+use wm_platform::{OpacityValue, Rect, WindowZOrder};
 
 use crate::{
-  animation_manager::AnimationTrigger,
+  animation_manager::{AnimationPlan, AnimationTrigger, SlideRequest},
   models::{Container, WindowContainer},
   traits::{CommonGetters, PositionGetters, WindowGetters},
   user_config::UserConfig,
@@ -50,7 +50,9 @@ pub fn platform_sync(
     let prev_effects_window = state.prev_effects_window.clone();
 
     if let Ok(window) = focused_container.as_window_container() {
-      apply_window_effects(&window, true, config);
+      let is_animation_hidden =
+        state.animation_manager.is_hidden(&window.id());
+      apply_window_effects(&window, true, is_animation_hidden, config);
       state.prev_effects_window = Some(window.clone());
     } else {
       state.prev_effects_window = None;
@@ -70,7 +72,9 @@ pub fn platform_sync(
       .filter(|window| window.id() != focused_container.id());
 
     for window in unfocused_windows {
-      apply_window_effects(&window, false, config);
+      let is_animation_hidden =
+        state.animation_manager.is_hidden(&window.id());
+      apply_window_effects(&window, false, is_animation_hidden, config);
     }
   }
 
@@ -208,6 +212,8 @@ fn redraw_containers(
   // Get monitors by their optimal hide corner.
   let monitors_by_hide_corner = state.monitors_by_hide_corner();
 
+  let mut redraws = Vec::new();
+
   for window in windows_to_update.iter().rev() {
     let should_bring_to_front = windows_to_bring_to_front.contains(window);
 
@@ -288,52 +294,119 @@ fn redraw_containers(
       DisplayState::Showing | DisplayState::Shown
     );
 
-    // Determine the animation effect to apply, if any.
-    let animation_effect = if state.pending_sync.should_skip_animations() {
+    // Hidden windows and syncs that skip animations (e.g. workspace
+    // switches) stop any running animation; the window then jumps
+    // straight to its target.
+    let animation_plan = if state.pending_sync.should_skip_animations()
+      || !is_visible
+    {
+      state.animation_manager.cancel_animation(&window.id());
       None
     } else {
-      let animation_trigger = if is_visible
-        && state.pending_sync.open_animation_windows().contains(window)
-      {
-        AnimationTrigger::WindowOpened
-      } else {
-        AnimationTrigger::WindowMoved
-      };
+      let animation_trigger =
+        if state.pending_sync.open_animation_windows().contains(window) {
+          AnimationTrigger::WindowOpened
+        } else {
+          AnimationTrigger::WindowMoved
+        };
 
-      state.animation_manager.animation_effect_for_window(
+      state.animation_manager.animation_plan_for_window(
         window,
-        animation_trigger,
+        &animation_trigger,
         &target_rect,
         &monitor.native_properties(),
         config,
       )
     };
 
-    if let Some(effect_config) = animation_effect {
-      if let Err(err) = state.animation_manager.start_animation(
-        window,
-        effect_config,
-        target_rect.clone(),
-        &monitor.native_properties(),
-        &state.dispatcher,
-      ) {
-        tracing::warn!("Failed to start animation: {}", err);
-      }
-    }
+    redraws.push(PendingRedraw {
+      window: (*window).clone(),
+      z_order,
+      target_rect,
+      is_visible,
+      animation_plan,
+      frame_rate: monitor.native_properties().refresh_rate.unwrap_or(60),
+      hide_corner: *hide_corner,
+    });
+  }
+
+  // Start all slides together, before any window moves, so that each
+  // snapshot shows the window where it was and their captures run in
+  // parallel.
+  let slide_requests = redraws
+    .iter()
+    .filter_map(|redraw| match &redraw.animation_plan {
+      Some(AnimationPlan::Slide(effect)) => Some(SlideRequest {
+        window: redraw.window.clone(),
+        effect: effect.clone(),
+        target_rect: redraw.target_rect.clone(),
+        frame_rate: redraw.frame_rate,
+      }),
+      _ => None,
+    })
+    .collect::<Vec<_>>();
+
+  let started_slides = state
+    .animation_manager
+    .start_slides(slide_requests, &state.dispatcher);
+
+  for redraw in redraws {
+    let window = &redraw.window;
+
+    let fade_effect = match &redraw.animation_plan {
+      Some(AnimationPlan::FadeIn(effect)) => Some(effect),
+      _ => None,
+    };
+
+    // Windows that animate wait at their target with an opacity of 0:
+    // behind their overlay for a slide, or until they fade in. Windows
+    // whose animation has ended get their opacity back.
+    let opacity_change =
+      if fade_effect.is_some() || started_slides.contains(&window.id()) {
+        OpacityChange::Hide
+      } else if state.animation_manager.take_hidden(&window.id()) {
+        OpacityChange::Restore(resting_opacity(
+          window,
+          window.id() == focused_container.id(),
+          config,
+        ))
+      } else {
+        OpacityChange::Keep
+      };
 
     tracing::debug!("Updating window position: {window}");
 
-    // Hide the real window when an animation layer is active.
+    // Marked before repositioning, so the window gets its opacity back
+    // even if repositioning fails partway.
+    if opacity_change == OpacityChange::Hide {
+      state.animation_manager.mark_hidden(window.id());
+    }
+
     if let Err(err) = reposition_window(
       window,
-      &target_rect,
-      *hide_corner,
-      &z_order,
-      animation_effect.is_some(),
-      is_visible,
+      &redraw.target_rect,
+      redraw.hide_corner,
+      &redraw.z_order,
+      &opacity_change,
+      redraw.is_visible,
       config,
     ) {
       tracing::warn!("Failed to set window position: {}", err);
+    }
+
+    // Start the fade even if repositioning failed, since it's what makes
+    // the window visible again.
+    if let Some(effect) = fade_effect {
+      state.animation_manager.start_fade(
+        window,
+        effect,
+        resting_opacity(
+          window,
+          window.id() == focused_container.id(),
+          config,
+        ),
+        redraw.frame_rate,
+      );
     }
 
     // Whether the window is either transitioning to or from fullscreen.
@@ -370,7 +443,8 @@ fn redraw_containers(
         DisplayState::Showing | DisplayState::Hiding
       )
     {
-      if let Err(err) = window.native().set_taskbar_visibility(is_visible)
+      if let Err(err) =
+        window.native().set_taskbar_visibility(redraw.is_visible)
       {
         tracing::warn!("Failed to set taskbar visibility: {}", err);
       }
@@ -380,6 +454,56 @@ fn redraw_containers(
   Ok(())
 }
 
+/// A window to reposition, with what was decided for it before any
+/// window moves.
+struct PendingRedraw {
+  window: WindowContainer,
+  z_order: WindowZOrder,
+  target_rect: Rect,
+  is_visible: bool,
+  animation_plan: Option<AnimationPlan>,
+  frame_rate: u32,
+  hide_corner: HideCorner,
+}
+
+/// What to do with a window's opacity when repositioning it.
+#[derive(Debug, PartialEq)]
+enum OpacityChange {
+  /// Leave the opacity as is.
+  Keep,
+
+  /// Set the opacity to 0 before moving the window, while an animation
+  /// shows it instead.
+  Hide,
+
+  /// Set the opacity back after an animation has ended.
+  Restore(OpacityValue),
+}
+
+/// Gets the opacity a window should have when no animation is running:
+/// its transparency effect if one applies, otherwise fully opaque.
+fn resting_opacity(
+  window: &WindowContainer,
+  is_focused: bool,
+  config: &UserConfig,
+) -> OpacityValue {
+  let window_effects = &config.value.window_effects;
+
+  let effect_config = if is_focused {
+    &window_effects.focused_window
+  } else {
+    &window_effects.other_windows
+  };
+
+  if effect_config.transparency.enabled
+    && should_apply_window_effects(&window.state())
+  {
+    effect_config.transparency.opacity
+  } else {
+    OpacityValue::from_alpha(u8::MAX)
+  }
+}
+
 fn reposition_window(
   window: &WindowContainer,
   rect: &Rect,
@@ -387,7 +511,7 @@ fn reposition_window(
   // LINT: `z_order` is only used on Windows.
   #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
   z_order: &WindowZOrder,
-  is_animation_start: bool,
+  opacity_change: &OpacityChange,
   is_visible: bool,
   config: &UserConfig,
 ) -> anyhow::Result<()> {
@@ -395,7 +519,7 @@ fn reposition_window(
 
   // For animations on macOS and `HideMethod::PlaceInCorner`, we need to
   // hide windows by repositioning them in the corner of the monitor.
-  if (cfg!(target_os = "macos") && is_animation_start)
+  if (cfg!(target_os = "macos") && *opacity_change == OpacityChange::Hide)
     || (config.value.general.hide_method == HideMethod::PlaceInCorner
       && !is_visible)
   {
@@ -442,6 +566,13 @@ fn reposition_window(
         SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE,
         SWP_NOCOPYBITS, SWP_NOSENDCHANGING, WS_MAXIMIZEBOX,
       };
+
+      // Hide before moving, so the move itself is never seen.
+      if *opacity_change == OpacityChange::Hide {
+        window
+          .native()
+          .set_transparency(&OpacityValue::from_alpha(0))?;
+      }
 
       // Restore window if it's minimized/maximized and shouldn't be. This
       // is needed to be able to move and resize it.
@@ -503,21 +634,15 @@ fn reposition_window(
         }
       }
 
+      if let OpacityChange::Restore(opacity) = opacity_change {
+        window.native().set_transparency(opacity)?;
+      }
+
       // Set visibility based on the hide method.
-      if is_animation_start {
-        window
-          .native()
-          .set_transparency(&OpacityValue::from_alpha(0))?;
-      } else if config.value.general.hide_method == HideMethod::Cloak {
+      if config.value.general.hide_method == HideMethod::Cloak {
         window.native().set_cloaked(!is_visible)?;
-        window
-          .native()
-          .set_transparency(&OpacityValue::from_alpha(u8::MAX))?;
       } else if is_visible {
         window.native().show()?;
-        window
-          .native()
-          .set_transparency(&OpacityValue::from_alpha(u8::MAX))?;
       } else {
         window.native().hide()?;
       }
@@ -569,9 +694,19 @@ fn apply_window_effects(
   #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
   window: &WindowContainer,
   is_focused: bool,
+  // LINT: `is_animation_hidden` is only used on Windows.
+  #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+  is_animation_hidden: bool,
   config: &UserConfig,
 ) {
   let window_effects = &config.value.window_effects;
+
+  // An animation owns the opacity of windows it has hidden, and restores
+  // it (transparency effect included) once it ends.
+  #[cfg(target_os = "windows")]
+  let transparency_enabled = !is_animation_hidden
+    && (window_effects.focused_window.transparency.enabled
+      || window_effects.other_windows.transparency.enabled);
 
   // LINT: `effect_config` is only used on Windows.
   #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
@@ -603,9 +738,7 @@ fn apply_window_effects(
       _ = window.native().set_corner_style(&CornerStyle::Default);
     }
 
-    if window_effects.focused_window.transparency.enabled
-      || window_effects.other_windows.transparency.enabled
-    {
+    if transparency_enabled {
       _ = window
         .native()
         .set_transparency(&OpacityValue::from_alpha(u8::MAX));
@@ -643,9 +776,7 @@ fn apply_window_effects(
   }
 
   #[cfg(target_os = "windows")]
-  if window_effects.focused_window.transparency.enabled
-    || window_effects.other_windows.transparency.enabled
-  {
+  if transparency_enabled {
     apply_transparency_effect(window, effect_config);
   }
 }
@@ -655,7 +786,6 @@ fn apply_window_effects(
 ///
 /// Effects are skipped for fullscreen windows, since they cover the entire
 /// monitor and should not show any border or rounded corners.
-#[cfg(target_os = "windows")]
 fn should_apply_window_effects(state: &WindowState) -> bool {
   !matches!(state, WindowState::Fullscreen(_))
 }

@@ -87,6 +87,47 @@ impl AnimationWindow {
     Ok(Self { inner })
   }
 
+  /// Creates several [`AnimationWindow`]s at once.
+  ///
+  /// Prefer this over repeated calls to [`AnimationWindow::new`] when
+  /// several windows start animating together: on Windows, their screen
+  /// captures run in parallel.
+  ///
+  /// Returns one result per request, in the same order.
+  #[must_use]
+  pub fn new_many(
+    context: &AnimationContext,
+    requests: &[AnimationWindowRequest],
+    dispatcher: &Dispatcher,
+  ) -> Vec<crate::Result<Self>> {
+    #[cfg(target_os = "windows")]
+    let results = platform_impl::AnimationWindow::new_many(
+      &context.inner,
+      requests,
+      dispatcher,
+    );
+
+    #[cfg(not(target_os = "windows"))]
+    let results = requests
+      .iter()
+      .map(|request| {
+        platform_impl::AnimationWindow::new(
+          &context.inner,
+          request.window,
+          &request.inner_rect,
+          &request.outer_rect,
+          request.opacity,
+          dispatcher,
+        )
+      })
+      .collect::<Vec<_>>();
+
+    results
+      .into_iter()
+      .map(|result| result.map(|inner| Self { inner }))
+      .collect()
+  }
+
   /// Resizes the window.
   ///
   /// Called when an animation's target rect changes mid-flight.
@@ -110,4 +151,20 @@ impl AnimationWindow {
   pub fn destroy(self) -> crate::Result<()> {
     self.inner.destroy()
   }
+}
+
+/// Arguments for one window in [`AnimationWindow::new_many`].
+pub struct AnimationWindowRequest<'a> {
+  /// Window to capture.
+  pub window: &'a NativeWindow,
+
+  /// Where the capture is first drawn.
+  pub inner_rect: Rect,
+
+  /// Bounds of the overlay; should span the animation's start and end
+  /// rects.
+  pub outer_rect: Rect,
+
+  /// Initial opacity of the capture, if animated.
+  pub opacity: Option<OpacityValue>,
 }

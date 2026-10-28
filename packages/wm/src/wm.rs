@@ -160,7 +160,12 @@ impl WindowManager {
       .animation_manager
       .tick_update(&self.state.dispatcher)?;
 
-    let completed_ids = self.state.animation_manager.completed_ids();
+    let completed_ids = {
+      let manager = &mut self.state.animation_manager;
+      let mut ids = manager.completed_slide_ids();
+      ids.extend(manager.take_completed_fade_ids());
+      ids
+    };
 
     if !completed_ids.is_empty() {
       let windows = self
@@ -169,7 +174,9 @@ impl WindowManager {
         .into_iter()
         .filter(|window| completed_ids.contains(&window.id()));
 
-      // Redraw windows with completed animations to their target position.
+      // Redraw windows with completed animations at their target position.
+      // Skipping animations ends each one, removes its overlay and gives
+      // the window its opacity back.
       self
         .state
         .pending_sync
@@ -177,10 +184,6 @@ impl WindowManager {
         .set_skip_animations(true);
 
       platform_sync(&mut self.state, config)?;
-
-      for completed_id in &completed_ids {
-        self.state.animation_manager.destroy_animation(completed_id);
-      }
     }
 
     Ok(())

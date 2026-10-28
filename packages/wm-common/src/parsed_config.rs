@@ -435,9 +435,18 @@ impl Default for AnimationEffectConfig {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnimationEffect {
-  /// Slide animation effect.
+  /// Slide animation effect. A snapshot of the window moves and scales
+  /// from its old position to its new one.
   #[default]
   Slide,
+
+  /// Fade animation effect. The window is placed at its new position
+  /// while invisible, then fades in.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Not supported; the window moves without animation.
+  Fade,
 }
 
 /// Helper function for setting a default value for a boolean field.

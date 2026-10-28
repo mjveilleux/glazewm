@@ -189,8 +189,60 @@ impl AnimationWindow {
     opacity: Option<OpacityValue>,
     dispatcher: &Dispatcher,
   ) -> crate::Result<Self> {
-    let captured = CapturedFrame::new(window.inner.hwnd().0, context)?;
+    let captured =
+      PendingCapture::start(window.inner.hwnd().0, context)?.wait()?;
 
+    Self::from_capture(
+      context, window, &captured, inner_rect, outer_rect, opacity,
+      dispatcher,
+    )
+  }
+
+  /// Implements [`AnimationWindow::new_many`].
+  ///
+  /// All captures are started before any is waited on, so the wait for
+  /// DWM's next frame is shared instead of paid once per window.
+  pub(crate) fn new_many(
+    context: &AnimationContext,
+    requests: &[crate::AnimationWindowRequest],
+    dispatcher: &Dispatcher,
+  ) -> Vec<crate::Result<Self>> {
+    let pending = requests
+      .iter()
+      .map(|request| {
+        PendingCapture::start(request.window.inner.hwnd().0, context)
+      })
+      .collect::<Vec<_>>();
+
+    pending
+      .into_iter()
+      .zip(requests)
+      .map(|(pending, request)| {
+        let captured = pending?.wait()?;
+
+        Self::from_capture(
+          context,
+          request.window,
+          &captured,
+          &request.inner_rect,
+          &request.outer_rect,
+          request.opacity,
+          dispatcher,
+        )
+      })
+      .collect()
+  }
+
+  /// Creates the overlay window from an already captured frame.
+  fn from_capture(
+    context: &AnimationContext,
+    window: &NativeWindow,
+    captured: &CapturedFrame,
+    inner_rect: &Rect,
+    outer_rect: &Rect,
+    opacity: Option<OpacityValue>,
+    dispatcher: &Dispatcher,
+  ) -> crate::Result<Self> {
     dispatcher.dispatch_sync(|| {
       COM_INIT.with(|_| {
         // Window is spawned on the main thread - avoids having to create a
@@ -213,7 +265,7 @@ impl AnimationWindow {
 
         Self::copy_texture_to_surface(
           context.d3d_context.get_ref()?,
-          &captured.texture,
+          captured.texture()?,
           &dcomp_surface,
         )?;
 
@@ -476,18 +528,30 @@ impl AnimationWindow {
 
 /// A screen capture of a window via `Windows.Graphics.Capture`.
 struct CapturedFrame {
-  texture: ID3D11Texture2D,
+  texture: Option<ID3D11Texture2D>,
   frame: Direct3D11CaptureFrame,
   session: GraphicsCaptureSession,
   frame_pool: Direct3D11CaptureFramePool,
 }
 
-impl CapturedFrame {
-  /// Captures a single frame of a given window.
+/// A window capture that has been started but not yet received a frame.
+struct PendingCapture {
+  session: GraphicsCaptureSession,
+  frame_pool: Direct3D11CaptureFramePool,
+  frame_rx: std::sync::mpsc::Receiver<()>,
+}
+
+impl PendingCapture {
+  /// How long to wait for DWM to deliver a frame.
+  const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+  /// Starts capturing a single frame of a given window.
   ///
-  /// Perf: ~35-60ms. Capturing the frame requires waiting for DWM to
-  /// produce a new frame (i.e. up to 16.7ms at 60Hz).
-  fn new(hwnd: isize, context: &AnimationContext) -> crate::Result<Self> {
+  /// Returns immediately; call [`PendingCapture::wait`] for the frame.
+  fn start(
+    hwnd: isize,
+    context: &AnimationContext,
+  ) -> crate::Result<Self> {
     let capture_item: GraphicsCaptureItem =
       unsafe { context.capture_interop.0.CreateForWindow(HWND(hwnd))? };
 
@@ -508,35 +572,71 @@ impl CapturedFrame {
     // Disable the yellow capture border on Windows 11 (Build 22000+).
     let _ = session.SetIsBorderRequired(false);
 
-    let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let (tx, frame_rx) = std::sync::mpsc::sync_channel::<()>(1);
 
     frame_pool.FrameArrived(&TypedEventHandler::new(
       move |_: &Option<Direct3D11CaptureFramePool>, _| {
-        let _ = tx.send(());
+        // A full channel means a frame is already waiting to be read.
+        let _ = tx.try_send(());
         Ok(())
       },
     ))?;
 
     session.StartCapture()?;
 
-    rx.recv_timeout(std::time::Duration::from_secs(1))
-      .map_err(|_| {
-        crate::Error::Platform("WGC capture timed out.".into())
-      })?;
-
-    let frame = frame_pool.TryGetNextFrame().map_err(|err| {
-      crate::Error::Platform(format!("Failed to get WGC frame: {err}"))
-    })?;
-
-    let surface = frame.Surface()?;
-    let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
-    let texture: ID3D11Texture2D = unsafe { access.GetInterface()? };
-
     Ok(Self {
-      texture,
-      frame,
       session,
       frame_pool,
+      frame_rx,
+    })
+  }
+
+  /// Blocks until the capture's first frame has arrived.
+  ///
+  /// Perf: up to one DWM frame (e.g. 16.7ms at 60Hz) after `start`.
+  fn wait(self) -> crate::Result<CapturedFrame> {
+    let close = |pending: &Self| {
+      let _ = pending.session.Close();
+      let _ = pending.frame_pool.Close();
+    };
+
+    if self.frame_rx.recv_timeout(Self::TIMEOUT).is_err() {
+      close(&self);
+      return Err(crate::Error::Platform("WGC capture timed out.".into()));
+    }
+
+    let frame = match self.frame_pool.TryGetNextFrame() {
+      Ok(frame) => frame,
+      Err(err) => {
+        close(&self);
+        return Err(crate::Error::Platform(format!(
+          "Failed to get WGC frame: {err}"
+        )));
+      }
+    };
+
+    // From here on, `CapturedFrame` owns the resources and closes them
+    // when dropped.
+    let mut captured = CapturedFrame {
+      texture: None,
+      frame,
+      session: self.session,
+      frame_pool: self.frame_pool,
+    };
+
+    let surface = captured.frame.Surface()?;
+    let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
+    captured.texture = Some(unsafe { access.GetInterface()? });
+
+    Ok(captured)
+  }
+}
+
+impl CapturedFrame {
+  /// Gets the captured texture.
+  fn texture(&self) -> crate::Result<&ID3D11Texture2D> {
+    self.texture.as_ref().ok_or_else(|| {
+      crate::Error::Platform("Captured frame has no texture.".to_string())
     })
   }
 
