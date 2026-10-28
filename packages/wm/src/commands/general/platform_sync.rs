@@ -12,7 +12,10 @@ use wm_platform::NativeWindowWindowsExt;
 use wm_platform::{OpacityValue, Rect, WindowZOrder};
 
 use crate::{
-  animation_manager::{AnimationPlan, AnimationTrigger, SlideRequest},
+  animation_manager::{
+    AnimationPlan, AnimationTrigger, LiveRequest, SlideRequest,
+    POPIN_START_SCALE,
+  },
   models::{Container, WindowContainer},
   traits::{CommonGetters, PositionGetters, WindowGetters},
   user_config::UserConfig,
@@ -361,21 +364,35 @@ fn redraw_containers(
       _ => None,
     };
 
+    // A live animation starts where the window is now (or, for a
+    // pop-in, smaller at its target), and the window is placed there.
+    let live = match &redraw.animation_plan {
+      Some(AnimationPlan::Live { effect, popin }) => {
+        live_frames(window, &redraw.target_rect, *popin, state)
+          .map(|(start, target)| (effect, *popin, start, target))
+      }
+      _ => None,
+    };
+
+    let is_popin = live.as_ref().is_some_and(|(_, popin, _, _)| *popin);
+
     // Windows that animate wait at their target with an opacity of 0:
     // behind their overlay for a slide, or until they fade in. Windows
     // whose animation has ended get their opacity back.
-    let opacity_change =
-      if fade_effect.is_some() || started_slides.contains(&window.id()) {
-        OpacityChange::Hide
-      } else if state.animation_manager.take_hidden(&window.id()) {
-        OpacityChange::Restore(resting_opacity(
-          window,
-          window.id() == focused_container.id(),
-          config,
-        ))
-      } else {
-        OpacityChange::Keep
-      };
+    let opacity_change = if fade_effect.is_some()
+      || is_popin
+      || started_slides.contains(&window.id())
+    {
+      OpacityChange::Hide
+    } else if state.animation_manager.take_hidden(&window.id()) {
+      OpacityChange::Restore(resting_opacity(
+        window,
+        window.id() == focused_container.id(),
+        config,
+      ))
+    } else {
+      OpacityChange::Keep
+    };
 
     tracing::debug!("Updating window position: {window}");
 
@@ -388,6 +405,7 @@ fn redraw_containers(
     if let Err(err) = reposition_window(
       window,
       &redraw.target_rect,
+      live.as_ref().map(|(_, _, start, _)| start),
       redraw.hide_corner,
       &redraw.z_order,
       &opacity_change,
@@ -395,6 +413,24 @@ fn redraw_containers(
       config,
     ) {
       tracing::warn!("Failed to set window position: {}", err);
+    }
+
+    if let Some((effect, popin, start_frame, target_frame)) = live {
+      state.animation_manager.start_live(LiveRequest {
+        window: window.clone(),
+        effect: effect.clone(),
+        start_frame,
+        target_frame,
+        target_rect: redraw.target_rect.clone(),
+        fade_to: popin.then(|| {
+          resting_opacity(
+            window,
+            window.id() == focused_container.id(),
+            config,
+          )
+        }),
+        frame_rate: redraw.frame_rate,
+      });
     }
 
     // Start the fade even if repositioning failed, since it's what makes
@@ -507,9 +543,49 @@ fn resting_opacity(
   }
 }
 
+/// Gets the native frames a live animation of the window goes between:
+/// where it is now (smaller at its target, for a pop-in), and its target.
+fn live_frames(
+  window: &WindowContainer,
+  target_rect: &Rect,
+  popin: bool,
+  state: &WmState,
+) -> Option<(Rect, Rect)> {
+  let target_frame =
+    target_rect.apply_delta(&window.total_border_delta().ok()?, None);
+
+  let start_frame = if let Some(frame) =
+    state.animation_manager.live_frame(&window.id())
+  {
+    frame
+  } else if popin {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    let scale = |length: i32| (length as f32 * POPIN_START_SCALE) as i32;
+
+    let width = scale(target_frame.width());
+    let height = scale(target_frame.height());
+
+    Rect::from_xy(
+      target_frame.x() + (target_frame.width() - width) / 2,
+      target_frame.y() + (target_frame.height() - height) / 2,
+      width,
+      height,
+    )
+  } else {
+    window.native_properties().frame
+  };
+
+  Some((start_frame, target_frame))
+}
+
+/// Repositions the window at `rect`, or at `native_frame` when given
+/// (a frame as the OS has it, borders included, such as the first frame of
+/// a live animation).
+#[allow(clippy::too_many_arguments)]
 fn reposition_window(
   window: &WindowContainer,
   rect: &Rect,
+  native_frame: Option<&Rect>,
   hide_corner: HideCorner,
   // LINT: `z_order` is only used on Windows.
   #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
@@ -518,7 +594,10 @@ fn reposition_window(
   is_visible: bool,
   config: &UserConfig,
 ) -> anyhow::Result<()> {
-  let rect = rect.apply_delta(&window.total_border_delta()?, None);
+  let rect = match native_frame {
+    Some(frame) => frame.clone(),
+    None => rect.apply_delta(&window.total_border_delta()?, None),
+  };
 
   // For animations on macOS and `HideMethod::PlaceInCorner`, we need to
   // hide windows by repositioning them in the corner of the monitor.

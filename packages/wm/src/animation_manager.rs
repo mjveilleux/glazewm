@@ -37,8 +37,17 @@ pub fn hides_new_windows(config: &UserConfig) -> bool {
       .animations
       .window_open
       .as_ref()
-      .is_some_and(|open| open.effect_type == AnimationEffect::Fade)
+      .is_some_and(|open| {
+        matches!(
+          open.effect_type,
+          AnimationEffect::Fade | AnimationEffect::Popin
+        )
+      })
 }
+
+/// Size a pop-in starts at, relative to the window's (Hyprland's
+/// `popin 87%`).
+pub const POPIN_START_SCALE: f32 = 0.87;
 
 pub enum AnimationTrigger {
   WindowOpened,
@@ -55,6 +64,30 @@ pub enum AnimationPlan {
   /// The real window is placed at the new position while invisible, then
   /// fades in.
   FadeIn(AnimationEffectConfig),
+
+  /// The real window itself moves to the new position a little each
+  /// frame. With `popin`, it grows there from smaller while fading in.
+  Live {
+    effect: AnimationEffectConfig,
+    popin: bool,
+  },
+}
+
+/// A window to start a live animation for.
+// LINT: Live animations are only started on Windows.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub struct LiveRequest {
+  pub window: WindowContainer,
+  pub effect: AnimationEffectConfig,
+  /// Where the window is when it starts, as its native frame.
+  pub start_frame: Rect,
+  /// Where it ends, as its native frame.
+  pub target_frame: Rect,
+  /// Its target in the layout, to compare later targets with.
+  pub target_rect: Rect,
+  /// Opacity to fade in to, for a pop-in.
+  pub fade_to: Option<OpacityValue>,
+  pub frame_rate: u32,
 }
 
 /// A window to start a slide animation for.
@@ -151,12 +184,41 @@ impl FadeState {
   }
 }
 
+/// State of a live animation: the real window's frame (and for a pop-in,
+/// its opacity) set each frame.
+// LINT: Live animations are only started on Windows.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[derive(Clone, Debug)]
+struct LiveState {
+  clock: AnimationClock,
+  window: NativeWindow,
+  start_frame: Rect,
+  target_frame: Rect,
+  target_rect: Rect,
+  fade_to: Option<OpacityValue>,
+}
+
+// LINT: Live animations are only started on Windows.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+impl LiveState {
+  /// Returns the window's frame at the current animation progress.
+  fn current_frame(&self) -> Rect {
+    self
+      .start_frame
+      .interpolate(&self.target_frame, self.clock.eased_progress())
+  }
+}
+
 /// Manages animations for all windows.
 ///
-/// A window has at most one animation at a time: a slide or a fade.
+/// A window has at most one animation at a time: a slide, a fade or a
+/// live one.
 pub struct AnimationManager {
   /// Active slide animations keyed by window ID.
   slides: HashMap<Uuid, SlideState>,
+
+  /// Active live animations keyed by window ID.
+  lives: HashMap<Uuid, LiveState>,
 
   /// Active fade-in animations keyed by window ID.
   fades: HashMap<Uuid, FadeState>,
@@ -199,6 +261,7 @@ impl AnimationManager {
 
     Self {
       slides: HashMap::new(),
+      lives: HashMap::new(),
       fades: HashMap::new(),
       hidden: HashSet::new(),
       tick_tx,
@@ -217,6 +280,18 @@ impl AnimationManager {
   pub fn is_animating(&self, window_id: &Uuid) -> bool {
     self.slides.contains_key(window_id)
       || self.fades.contains_key(window_id)
+      || self.lives.contains_key(window_id)
+  }
+
+  /// Whether a live animation is moving the window. Its moves are then
+  /// the WM's own.
+  pub fn is_live(&self, window_id: &Uuid) -> bool {
+    self.lives.contains_key(window_id)
+  }
+
+  /// Where a live animation has the window now, as its native frame.
+  pub fn live_frame(&self, window_id: &Uuid) -> Option<Rect> {
+    self.lives.get(window_id).map(LiveState::current_frame)
   }
 
   /// Whether an animation has set the window's real opacity to 0.
@@ -237,12 +312,21 @@ impl AnimationManager {
   }
 
   /// Gets the window IDs of slides that have completed.
+  ///
+  /// Live animations count as slides: both end with a redraw.
   pub fn completed_slide_ids(&self) -> HashSet<Uuid> {
     self
       .slides
       .iter()
       .filter(|(_, slide)| slide.clock.is_complete())
       .map(|(id, _)| *id)
+      .chain(
+        self
+          .lives
+          .iter()
+          .filter(|(_, live)| live.clock.is_complete())
+          .map(|(id, _)| *id),
+      )
       .collect()
   }
 
@@ -272,8 +356,9 @@ impl AnimationManager {
   pub fn cancel_animation(&mut self, window_id: &Uuid) {
     let had_fade = self.fades.remove(window_id).is_some();
     let had_slide = self.slides.remove(window_id).is_some();
+    let had_live = self.lives.remove(window_id).is_some();
 
-    if had_fade || had_slide {
+    if had_fade || had_slide || had_live {
       self.update_tick_rate();
     }
 
@@ -322,6 +407,24 @@ impl AnimationManager {
         fade.window.set_transparency(&fade.current_opacity())
       {
         tracing::warn!("Failed to update fade animation: {err}");
+      }
+    }
+
+    // Live animations move the real windows. A window that won't move
+    // just stays where it is until the animation ends.
+    #[cfg(target_os = "windows")]
+    for live in self.lives.values() {
+      if let Err(err) = live.window.set_frame(&live.current_frame()) {
+        tracing::debug!("Failed to update live animation: {err}");
+      }
+
+      if let Some(fade_to) = &live.fade_to {
+        let opacity = OpacityValue(0.0)
+          .interpolate(fade_to, live.clock.eased_progress());
+
+        if let Err(err) = live.window.set_transparency(&opacity) {
+          tracing::debug!("Failed to update pop-in opacity: {err}");
+        }
       }
     }
 
@@ -406,7 +509,11 @@ impl AnimationManager {
         let prev_rect = self
           .slides
           .get(&window.id())
-          .map_or(&frame, |slide| &slide.target_rect);
+          .map(|slide| &slide.target_rect)
+          .or_else(|| {
+            self.lives.get(&window.id()).map(|live| &live.target_rect)
+          })
+          .unwrap_or(&frame);
 
         let distance = (prev_rect.x() - target_rect.x()).abs()
           + (prev_rect.y() - target_rect.y()).abs()
@@ -439,7 +546,62 @@ impl AnimationManager {
         }
       }
       AnimationEffect::Fade => None,
+      // Live animations move the real window, which is only done on
+      // Windows. A window already moving keeps moving to its new target,
+      // and one mid-slide finishes its slide.
+      AnimationEffect::Move | AnimationEffect::Popin
+        if cfg!(target_os = "windows") =>
+      {
+        if self.slides.contains_key(&window.id()) {
+          Some(AnimationPlan::Slide(effect.clone()))
+        } else {
+          Some(AnimationPlan::Live {
+            effect: effect.clone(),
+            popin: effect.effect_type == AnimationEffect::Popin
+              && !self.lives.contains_key(&window.id()),
+          })
+        }
+      }
+      AnimationEffect::Move | AnimationEffect::Popin => None,
     }
+  }
+
+  /// Starts or retargets a live animation.
+  // LINT: Live animations are only started on Windows.
+  #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+  pub fn start_live(&mut self, request: LiveRequest) {
+    let window_id = request.window.id();
+
+    // A live animation replaces a fade; the window stays hidden until it
+    // ends, unless it fades in itself.
+    self.fades.remove(&window_id);
+
+    // A pop-in sent elsewhere before it ended is shown in full at once,
+    // rather than fading in again from nothing.
+    #[cfg(target_os = "windows")]
+    if request.fade_to.is_none() {
+      if let Some(fade_to) = self
+        .lives
+        .get(&window_id)
+        .and_then(|live| live.fade_to.as_ref())
+      {
+        let _ = request.window.native().set_transparency(fade_to);
+      }
+    }
+
+    self.lives.insert(
+      window_id,
+      LiveState {
+        clock: AnimationClock::new(&request.effect, request.frame_rate),
+        window: request.window.native().clone(),
+        start_frame: request.start_frame,
+        target_frame: request.target_frame,
+        target_rect: request.target_rect,
+        fade_to: request.fade_to,
+      },
+    );
+
+    self.update_tick_rate();
   }
 
   /// Starts or extends slide animations for several windows at once.
@@ -664,6 +826,7 @@ impl AnimationManager {
       .values()
       .map(|slide| slide.clock.frame_rate)
       .chain(self.fades.values().map(|fade| fade.clock.frame_rate))
+      .chain(self.lives.values().map(|live| live.clock.frame_rate))
       .max();
 
     // Keep the running task when the rate is unchanged, so ticks stay

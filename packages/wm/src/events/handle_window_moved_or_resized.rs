@@ -103,6 +103,14 @@ pub fn handle_window_moved_or_resized(
       }
     }
 
+    // A live animation moves the window every frame: those moves are the
+    // WM's own, not the user's.
+    if !is_interactive_start
+      && state.animation_manager.is_live(&window.id())
+    {
+      return Ok(());
+    }
+
     let is_minimized = try_warn!(window.native().is_minimized());
 
     // Ignore events for minimized windows. Let them be handled by the

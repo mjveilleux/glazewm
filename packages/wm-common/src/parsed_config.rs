@@ -447,6 +447,22 @@ pub enum AnimationEffect {
   ///
   /// - **macOS**: Not supported; the window moves without animation.
   Fade,
+
+  /// Move animation effect, as in Hyprland: the window itself, live,
+  /// moves and resizes a little each frame until it's in place.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Not supported; the window moves without animation.
+  Move,
+
+  /// Pop-in animation effect, as in Hyprland: the window itself grows
+  /// from 87% of its size to its place while fading in. For new windows.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Not supported; the window moves without animation.
+  Popin,
 }
 
 /// Helper function for setting a default value for a boolean field.
