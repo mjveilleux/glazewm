@@ -140,14 +140,16 @@ impl AnimationContext {
     static REQUESTED: Once = Once::new();
 
     REQUESTED.call_once(|| {
-      COM_INIT.with(|_| {
-        let status = GraphicsCaptureAccess::RequestAccessAsync(
-          GraphicsCaptureAccessKind::Borderless,
-        )
-        .and_then(|operation| operation.get());
-
-        if let Err(err) = status {
-          tracing::debug!("Borderless capture not available: {err}");
+      COM_INIT.with(|_| match GraphicsCaptureAccess::RequestAccessAsync(
+        GraphicsCaptureAccessKind::Borderless,
+      )
+      .and_then(|operation| operation.get())
+      {
+        Ok(status) => {
+          tracing::info!("Borderless capture access: {}.", status.0);
+        }
+        Err(err) => {
+          tracing::info!("Borderless capture not available: {err}");
         }
       });
     });
@@ -597,7 +599,9 @@ impl PendingCapture {
     let _ = session.SetIsCursorCaptureEnabled(false);
 
     // Disable the yellow capture border on Windows 11 (Build 22000+).
-    let _ = session.SetIsBorderRequired(false);
+    if let Err(err) = session.SetIsBorderRequired(false) {
+      tracing::debug!("Capture border stays on: {err}");
+    }
 
     let (tx, frame_rx) = std::sync::mpsc::sync_channel::<()>(1);
 
