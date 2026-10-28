@@ -1,0 +1,44 @@
+name: Animation check
+
+# Runs GlazeWM with window animations on a Windows desktop, records the screen while windows
+# open, close and reflow, and uploads the frames (scripts/animation-check.ps1).
+on:
+  push:
+    branches: ['claude/**', 'omawin']
+    paths: ['packages/**', 'scripts/animation-check.ps1', '.github/workflows/animation-check.yaml']
+  workflow_dispatch:
+    inputs:
+      duration_ms:
+        description: Animation duration (slowed so the recording catches several frames).
+        default: '600'
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@21dc36fb71dd22e3317045c0c31a3f4249868b17
+        with:
+          toolchain: nightly
+
+      - uses: swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3
+        with:
+          shared-key: animation-check-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build
+        shell: bash
+        run: cargo build --locked --release -p wm -p wm-cli
+
+      - name: Record animations
+        shell: pwsh
+        run: ./scripts/animation-check.ps1 -DurationMs ${{ inputs.duration_ms || '600' }}
+
+      - name: Upload recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: animation-check
+          path: out/
+          retention-days: 7
