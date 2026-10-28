@@ -197,6 +197,12 @@ impl EventLoop {
     tracing::info!("Event loop thread exiting.");
     unsafe { DestroyWindow(HWND(self.source.message_window_handle)) }?;
 
+    // This is the main thread, and animations use COM on it. Its COM
+    // objects (proxies into Explorer) are released now, while that still
+    // works: left to the thread's TLS destructor, they'd be released while
+    // the process exits, which stalls it.
+    super::com::release_thread_com();
+
     Ok(())
   }
 

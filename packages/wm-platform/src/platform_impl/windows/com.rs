@@ -126,6 +126,18 @@ impl ComInit {
   }
 }
 
+/// Releases the current thread's COM interfaces, if it has any, ahead of
+/// its TLS destructor. COM itself stays initialized until then.
+pub(crate) fn release_thread_com() {
+  let _ = COM_INIT.try_with(|com_init| {
+    if let Ok(mut com_init) = com_init.try_borrow_mut() {
+      drop(com_init.taskbar_list.take());
+      drop(com_init.application_view_collection.take());
+      drop(com_init.service_provider.take());
+    }
+  });
+}
+
 impl Default for ComInit {
   fn default() -> Self {
     Self::new()

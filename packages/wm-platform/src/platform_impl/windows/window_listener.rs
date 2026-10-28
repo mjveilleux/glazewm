@@ -187,9 +187,11 @@ impl WindowListener {
       _ => return,
     };
 
-    if let Err(err) = event_tx.send(event) {
-      tracing::warn!("Failed to send window event: {}.", err);
-    }
+    // The only way this fails is the WM having dropped its receiver, i.e.
+    // it's shutting down. Not logged: this hook still runs while the
+    // process exits (releasing COM pumps messages from a TLS destructor),
+    // and logging then panics on the logger's own, already destroyed, TLS.
+    let _ = event_tx.send(event);
   }
 }
 
