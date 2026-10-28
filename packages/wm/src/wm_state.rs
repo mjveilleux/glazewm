@@ -689,6 +689,10 @@ impl WmState {
 
 impl Drop for WmState {
   fn drop(&mut self) {
+    // Windows hidden the moment they were shown, not yet managed.
+    #[cfg(target_os = "windows")]
+    wm_platform::restore_windows_hidden_on_show();
+
     let managed_windows = self.windows();
 
     for window in &managed_windows {

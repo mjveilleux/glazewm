@@ -150,6 +150,11 @@ async fn start_wm(
 
   // Start listening for platform events after populating initial state.
   let mut window_listener = WindowListener::new(dispatcher)?;
+
+  #[cfg(target_os = "windows")]
+  wm_platform::set_hide_windows_on_show(
+    animation_manager::hides_new_windows(&config),
+  );
   let mut display_listener = DisplayListener::new(dispatcher)?;
   let mut mouse_listener = MouseListener::new(
     if config.value.general.focus_follows_cursor {

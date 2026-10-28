@@ -111,7 +111,7 @@ impl WindowManager {
           handle_window_focused(&window, state, config)
         }
         WindowEvent::Shown { window, .. } => {
-          handle_window_shown(window, state, config)
+          handle_window_shown(&window, state, config)
         }
         WindowEvent::Hidden { window, .. } => {
           handle_window_hidden(&window, state, config)

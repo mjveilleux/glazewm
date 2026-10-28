@@ -168,10 +168,18 @@ impl WindowListener {
         is_interactive_end: true,
         notification,
       },
-      EVENT_OBJECT_SHOW | EVENT_OBJECT_UNCLOAKED => WindowEvent::Shown {
-        window: NativeWindow::new(handle.0).into(),
-        notification,
-      },
+      EVENT_OBJECT_SHOW | EVENT_OBJECT_UNCLOAKED => {
+        // A new window: hidden right away (if enabled), before this event
+        // reaches the WM, which then fades it in where it belongs.
+        if event_type == EVENT_OBJECT_SHOW {
+          super::hide_on_show::hide_if_app_window(handle.0);
+        }
+
+        WindowEvent::Shown {
+          window: NativeWindow::new(handle.0).into(),
+          notification,
+        }
+      }
       EVENT_OBJECT_NAMECHANGE => WindowEvent::TitleChanged {
         window: NativeWindow::new(handle.0).into(),
         notification,

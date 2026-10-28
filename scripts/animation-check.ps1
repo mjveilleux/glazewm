@@ -120,10 +120,13 @@ Stop-Process -Id $notepads[1].Id
 Start-Sleep -Seconds $pause
 Save-State 'close-2'
 
-Write-Event 'toggle tiling direction'
-& $cli command toggle-tiling-direction | Out-Null
+# The focused Notepad swaps places with its neighbor: two windows slide.
+Write-Event 'move window left'
+& $cli command focus --container-id ((& $cli query windows | ConvertFrom-Json).data.windows |
+        Where-Object processName -eq 'notepad' | Select-Object -Last 1).id | Out-Null
+& $cli command move --direction left | Out-Null
 Start-Sleep -Seconds $pause
-Save-State 'toggle'
+Save-State 'move'
 
 Write-Event 'done'
 $rec | Wait-Process -Timeout 40 -ErrorAction SilentlyContinue

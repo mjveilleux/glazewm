@@ -3,6 +3,7 @@ pub(crate) mod com;
 mod display;
 mod display_listener;
 mod event_loop;
+pub(crate) mod hide_on_show;
 mod keyboard_hook;
 mod mouse_listener;
 mod native_window;

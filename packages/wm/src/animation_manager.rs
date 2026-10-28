@@ -24,6 +24,22 @@ use crate::{
   user_config::UserConfig,
 };
 
+/// Whether new windows should be hidden the moment they're shown, so they
+/// never appear where their app put them before fading in at their place.
+///
+/// Only with cloaking as the hide method: with the other methods, the WM
+/// itself shows windows it manages, which would hide them too.
+#[cfg(target_os = "windows")]
+pub fn hides_new_windows(config: &UserConfig) -> bool {
+  config.value.general.hide_method == wm_common::HideMethod::Cloak
+    && config
+      .value
+      .animations
+      .window_open
+      .as_ref()
+      .is_some_and(|open| open.effect_type == AnimationEffect::Fade)
+}
+
 pub enum AnimationTrigger {
   WindowOpened,
   WindowMoved,
