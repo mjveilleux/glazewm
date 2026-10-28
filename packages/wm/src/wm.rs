@@ -925,5 +925,22 @@ impl WindowManager {
         tracing::warn!("{:?}", err);
       }
     }
+
+    // Leave every window visible: those on other workspaces are hidden
+    // or cloaked, and an animation may have made one transparent. A WM
+    // started next only manages windows it can see.
+    #[cfg(target_os = "windows")]
+    for window in self.state.windows() {
+      let native = window.native();
+
+      if let Err(err) = native.set_cloaked(false) {
+        tracing::debug!("Failed to uncloak window on exit: {err}");
+      }
+
+      let _ = native.show();
+      let _ = native.set_taskbar_visibility(true);
+      let _ = native
+        .set_transparency(&wm_platform::OpacityValue::from_alpha(u8::MAX));
+    }
   }
 }
