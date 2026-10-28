@@ -80,6 +80,14 @@ function Show-Logs {
     }
 }
 
+# Windows' privacy switch for capturing windows without the yellow border (Settings > Privacy &
+# security), for desktop apps. Without it, GlazeWM's snapshots briefly outline each window.
+$consent = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\graphicsCaptureWithoutBorder'
+foreach ($key in $consent, "$consent\NonPackaged") {
+    New-Item -Path $key -Force | Out-Null
+    Set-ItemProperty -Path $key -Name Value -Value 'Allow'
+}
+
 Write-Event 'start glazewm'
 Write-Host "session $([Diagnostics.Process]::GetCurrentProcess().SessionId), interactive $([Environment]::UserInteractive), explorer $([bool](Get-Process explorer -ErrorAction SilentlyContinue))"
 $wm = Start-Process $glazewm -ArgumentList 'start', '--config', "`"$config`"", '--verbose' -PassThru `
