@@ -1282,3 +1282,129 @@ fn apply_transparency_effect(
 
   _ = window.native().set_transparency(transparency);
 }
+
+#[cfg(test)]
+mod switch_tests {
+  use wm_common::{AnimationEffect, AnimationTiming, ResolvedEffect};
+  use wm_platform::{Easing, Rect, WindowZOrder};
+
+  use super::{PendingRedraw, SwitchAnimation, SwitchRole};
+  use crate::models::TilingWindow;
+
+  /// A workspace effect of the given style, sliding `slide_fraction` of
+  /// the monitor.
+  fn effect(
+    style: AnimationEffect,
+    slide_fraction: f32,
+  ) -> ResolvedEffect {
+    ResolvedEffect {
+      style,
+      timing: AnimationTiming {
+        duration_ms: 200,
+        easing: Easing::default(),
+      },
+      fade: None,
+      popin_scale: 1.0,
+      slide_fraction,
+      live: false,
+    }
+  }
+
+  /// A switch on a 1000x600 monitor, `direction` 1 (to a later
+  /// workspace) or -1.
+  fn switch(effect: &ResolvedEffect, direction: i32) -> SwitchAnimation {
+    SwitchAnimation {
+      monitor_id: uuid::Uuid::new_v4(),
+      monitor_rect: Rect::from_xy(0, 0, 1000, 600),
+      direction,
+      leaving: Some(effect.clone()),
+      arriving: Some(effect.clone()),
+    }
+  }
+
+  /// A window at `rect` to redraw.
+  fn redraw(rect: Rect, role: SwitchRole) -> PendingRedraw {
+    PendingRedraw {
+      window: TilingWindow::mock().call().into(),
+      z_order: WindowZOrder::Normal,
+      target_rect: rect,
+      is_visible: true,
+      animation_plan: None,
+      frame_rate: 60,
+      hide_corner: wm_common::HideCorner::BottomRight,
+      switch_role: Some(role),
+    }
+  }
+
+  #[test]
+  fn slide_goes_the_way_of_the_workspaces() {
+    let rect = Rect::from_xy(100, 50, 400, 300);
+    let effect = effect(AnimationEffect::Slide, 1.0);
+
+    // To a later workspace: the old one leaves to the left, the new one
+    // comes from the right.
+    let next = switch(&effect, 1);
+    let leaving = next
+      .leaving_request(&redraw(rect.clone(), SwitchRole::Leaving))
+      .expect("leaving");
+    let arriving = next
+      .arriving_request(&redraw(rect.clone(), SwitchRole::Arriving))
+      .expect("arriving");
+
+    assert_eq!(leaving.target_rect, Rect::from_xy(-900, 50, 400, 300));
+    assert_eq!(
+      arriving.start_rect,
+      Some(Rect::from_xy(1100, 50, 400, 300))
+    );
+    assert_eq!(arriving.target_rect, rect);
+    assert_eq!(leaving.opacity, None);
+
+    // Back to an earlier one: the other way.
+    let previous = switch(&effect, -1);
+    let leaving = previous
+      .leaving_request(&redraw(rect.clone(), SwitchRole::Leaving))
+      .expect("leaving");
+    assert_eq!(leaving.target_rect, Rect::from_xy(1100, 50, 400, 300));
+  }
+
+  #[test]
+  fn slidevert_goes_down_and_fades_stay_put() {
+    let rect = Rect::from_xy(100, 50, 400, 300);
+
+    let vertical = switch(&effect(AnimationEffect::SlideVert, 1.0), 1);
+    let arriving = vertical
+      .arriving_request(&redraw(rect.clone(), SwitchRole::Arriving))
+      .expect("arriving");
+    assert_eq!(
+      arriving.start_rect,
+      Some(Rect::from_xy(100, 650, 400, 300))
+    );
+
+    let fade = switch(&effect(AnimationEffect::Fade, 0.0), 1);
+    let arriving = fade
+      .arriving_request(&redraw(rect.clone(), SwitchRole::Arriving))
+      .expect("arriving");
+    let leaving = fade
+      .leaving_request(&redraw(rect.clone(), SwitchRole::Leaving))
+      .expect("leaving");
+    assert_eq!(arriving.start_rect, Some(rect.clone()));
+    assert_eq!(arriving.opacity, Some((0.0, 1.0)));
+    assert_eq!(leaving.target_rect, rect);
+    assert_eq!(leaving.opacity, Some((1.0, 0.0)));
+  }
+
+  #[test]
+  fn slidefade_slides_part_of_the_way() {
+    let rect = Rect::from_xy(100, 50, 400, 300);
+    let slidefade = switch(&effect(AnimationEffect::SlideFade, 0.2), 1);
+
+    let arriving = slidefade
+      .arriving_request(&redraw(rect, SwitchRole::Arriving))
+      .expect("arriving");
+    assert_eq!(
+      arriving.start_rect,
+      Some(Rect::from_xy(300, 50, 400, 300))
+    );
+    assert_eq!(arriving.opacity, Some((0.0, 1.0)));
+  }
+}

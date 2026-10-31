@@ -273,6 +273,30 @@ Write-Event 'move window left'
 Start-Sleep -Seconds $pause
 Save-State 'move'
 
+# Interruptions, each in the middle of an animation: a new window moved while it's still
+# opening, a window its app kills mid-slide, and the config reloaded mid-slide.
+$gap = [Math]::Max(50, [int]($DurationMs / 3))
+Write-Event 'open notepad 4 and move it while opening'
+$extra = Start-Process notepad -PassThru
+Start-Sleep -Milliseconds 400
+& $cli command move --direction left | Out-Null
+Start-Sleep -Seconds $pause
+Save-State 'move-while-opening'
+
+Write-Event 'kill notepad 4 mid-slide'
+& $cli command move --direction right | Out-Null
+Start-Sleep -Milliseconds $gap
+$extra | Stop-Process -ErrorAction SilentlyContinue
+Start-Sleep -Seconds $pause
+Save-State 'kill-mid-slide'
+
+Write-Event 'reload config mid-slide'
+& $cli command move --direction right | Out-Null
+Start-Sleep -Milliseconds $gap
+& $cli command wm-reload-config | Out-Null
+Start-Sleep -Seconds $pause
+Save-State 'reload-mid-slide'
+
 # The focused Notepad goes to workspace 2, then the workspaces switch 1, 2, 1, 3, 1, each switch
 # coming before the last one is over, so every one turns the running slides around.
 Write-Event 'move window to workspace 2'
