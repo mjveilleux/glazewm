@@ -6,14 +6,14 @@ use std::{
 use anyhow::Context;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use wm_common::{AnimationEffect, AnimationEffectConfig};
+use wm_common::{AnimationEffect, AnimationTiming, ResolvedEffect};
 #[cfg(target_os = "macos")]
 use wm_platform::DispatcherExtMacOs;
 #[cfg(target_os = "windows")]
 use wm_platform::NativeWindowWindowsExt;
 use wm_platform::{
   AnimationContext, AnimationWindow, AnimationWindowRequest, Dispatcher,
-  EasingFunction, NativeWindow, OpacityValue, Rect,
+  Easing, NativeWindow, OpacityValue, Rect,
 };
 
 use crate::{
@@ -32,22 +32,20 @@ use crate::{
 pub fn hides_new_windows(config: &UserConfig) -> bool {
   config.value.general.hide_method == wm_common::HideMethod::Cloak
     && config.value.animations.open_effect().is_some_and(|open| {
-      matches!(
-        open.effect_type,
-        AnimationEffect::Fade | AnimationEffect::Popin
-      )
+      matches!(open.style, AnimationEffect::Fade | AnimationEffect::Popin)
     })
 }
 
-/// Size a pop-in starts at, relative to the window's (Hyprland's
-/// `popin 87%`).
-pub const POPIN_START_SCALE: f32 = 0.87;
-
-/// Size a closing window's pop-out ends at, relative to the window's
-/// (Omarchy's `windowsOut`, `popin 95%`).
-// LINT: Close animations are only started on Windows.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub const CLOSE_END_SCALE: f32 = 0.95;
+/// Keeps a rect at least one pixel wide and tall: an overshooting curve
+/// could otherwise shrink a window past nothing and flip it.
+fn at_least_one_pixel(rect: &Rect) -> Rect {
+  Rect::from_xy(
+    rect.x(),
+    rect.y(),
+    rect.width().max(1),
+    rect.height().max(1),
+  )
+}
 
 pub enum AnimationTrigger {
   WindowOpened,
@@ -59,18 +57,15 @@ pub enum AnimationTrigger {
 pub enum AnimationPlan {
   /// A snapshot of the window slides from its old position to the new
   /// one, while the real window waits invisible at the new position.
-  Slide(AnimationEffectConfig),
+  Slide(ResolvedEffect),
 
   /// The real window is placed at the new position while invisible, then
   /// fades in.
-  FadeIn(AnimationEffectConfig),
+  FadeIn(ResolvedEffect),
 
   /// The real window itself moves to the new position a little each
   /// frame. With `popin`, it grows there from smaller while fading in.
-  Live {
-    effect: AnimationEffectConfig,
-    popin: bool,
-  },
+  Live { effect: ResolvedEffect, popin: bool },
 }
 
 /// A window to start a live animation for.
@@ -78,7 +73,7 @@ pub enum AnimationPlan {
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub struct LiveRequest {
   pub window: WindowContainer,
-  pub effect: AnimationEffectConfig,
+  pub effect: ResolvedEffect,
   /// Where the window is when it starts, as its native frame.
   pub start_frame: Rect,
   /// Where it ends, as its native frame.
@@ -93,7 +88,7 @@ pub struct LiveRequest {
 /// A window to start a slide animation for.
 pub struct SlideRequest {
   pub window: WindowContainer,
-  pub effect: AnimationEffectConfig,
+  pub effect: ResolvedEffect,
   pub target_rect: Rect,
   pub frame_rate: u32,
 }
@@ -103,20 +98,31 @@ pub struct SlideRequest {
 struct AnimationClock {
   start_time: Instant,
   duration: Duration,
-  easing: EasingFunction,
+  easing: Easing,
 
   /// Target frame rate for the animation.
   frame_rate: u32,
 }
 
 impl AnimationClock {
-  fn new(config: &AnimationEffectConfig, frame_rate: u32) -> Self {
+  fn new(timing: &AnimationTiming, frame_rate: u32) -> Self {
     Self {
       start_time: Instant::now(),
-      duration: Duration::from_millis(u64::from(config.duration_ms)),
-      easing: config.easing.clone(),
+      duration: Duration::from_millis(u64::from(timing.duration_ms)),
+      easing: timing.easing.clone(),
       frame_rate,
     }
+  }
+
+  /// A clock for an opacity change: the effect's fade, or one that's
+  /// over at once when fades are off.
+  fn for_fade(effect: &ResolvedEffect, frame_rate: u32) -> Self {
+    let instant = AnimationTiming {
+      duration_ms: 0,
+      easing: Easing::default(),
+    };
+
+    Self::new(effect.fade.as_ref().unwrap_or(&instant), frame_rate)
   }
 
   /// Returns the normalized animation progress in `[0.0, 1.0]`.
@@ -130,7 +136,8 @@ impl AnimationClock {
     }
   }
 
-  /// Returns the eased animation progress in `[0.0, 1.0]`.
+  /// Returns the eased animation progress: 0 at the start, 1 at the end,
+  /// and with an overshooting curve, outside [0, 1] in between.
   fn eased_progress(&self) -> f32 {
     self.easing.apply(self.progress())
   }
@@ -156,9 +163,11 @@ struct SlideState {
 impl SlideState {
   /// Returns the interpolated rect at the current animation progress.
   fn current_rect(&self) -> Rect {
-    self
-      .start_rect
-      .interpolate(&self.target_rect, self.clock.eased_progress())
+    at_least_one_pixel(
+      &self
+        .start_rect
+        .interpolate(&self.target_rect, self.clock.eased_progress()),
+    )
   }
 }
 
@@ -191,6 +200,9 @@ impl FadeState {
 #[derive(Clone, Debug)]
 struct LiveState {
   clock: AnimationClock,
+
+  /// Timing of a pop-in's fade.
+  fade_clock: AnimationClock,
   window: NativeWindow,
   start_frame: Rect,
   target_frame: Rect,
@@ -203,9 +215,24 @@ struct LiveState {
 impl LiveState {
   /// Returns the window's frame at the current animation progress.
   fn current_frame(&self) -> Rect {
-    self
-      .start_frame
-      .interpolate(&self.target_frame, self.clock.eased_progress())
+    at_least_one_pixel(
+      &self
+        .start_frame
+        .interpolate(&self.target_frame, self.clock.eased_progress()),
+    )
+  }
+
+  /// Whether both the motion and the opacity change are over.
+  fn is_complete(&self) -> bool {
+    self.clock.is_complete() && self.fade_clock.is_complete()
+  }
+
+  /// Returns the window's opacity at the current progress, for a pop-in.
+  fn current_opacity(&self) -> Option<OpacityValue> {
+    self.fade_to.as_ref().map(|fade_to| {
+      OpacityValue(0.0)
+        .interpolate(fade_to, self.fade_clock.eased_progress())
+    })
   }
 }
 
@@ -215,7 +242,11 @@ impl LiveState {
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Debug)]
 struct CloseState {
+  /// Timing of the shrink.
   clock: AnimationClock,
+
+  /// Timing of the fade out.
+  fade_clock: AnimationClock,
 
   /// Where the window was when it was closed.
   rect: Rect,
@@ -232,9 +263,17 @@ impl CloseState {
     let progress = self.clock.eased_progress();
 
     (
-      OpacityValue(1.0 - progress),
-      1.0 + (self.end_scale - 1.0) * progress,
+      OpacityValue(1.0)
+        .interpolate(&OpacityValue(0.0), self.fade_clock.eased_progress()),
+      // An overshooting curve may pass the end scale, but never flips the
+      // picture.
+      (1.0 + (self.end_scale - 1.0) * progress).max(0.01),
     )
+  }
+
+  /// Whether both the shrink and the fade are over.
+  fn is_complete(&self) -> bool {
+    self.clock.is_complete() && self.fade_clock.is_complete()
   }
 }
 
@@ -381,7 +420,7 @@ impl AnimationManager {
         self
           .lives
           .iter()
-          .filter(|(_, live)| live.clock.is_complete())
+          .filter(|(_, live)| live.is_complete())
           .map(|(id, _)| *id),
       )
       .collect()
@@ -477,10 +516,7 @@ impl AnimationManager {
         tracing::debug!("Failed to update live animation: {err}");
       }
 
-      if let Some(fade_to) = &live.fade_to {
-        let opacity = OpacityValue(0.0)
-          .interpolate(fade_to, live.clock.eased_progress());
-
+      if let Some(opacity) = live.current_opacity() {
         if let Err(err) = live.window.set_transparency(&opacity) {
           tracing::debug!("Failed to update pop-in opacity: {err}");
         }
@@ -531,14 +567,14 @@ impl AnimationManager {
     if !self
       .closes
       .iter()
-      .any(|closing| closing.state.clock.is_complete())
+      .any(|closing| closing.state.is_complete())
     {
       return;
     }
 
     let (done, running) = std::mem::take(&mut self.closes)
       .into_iter()
-      .partition::<Vec<_>, _>(|closing| closing.state.clock.is_complete());
+      .partition::<Vec<_>, _>(|closing| closing.state.is_complete());
 
     self.closes = running;
 
@@ -620,12 +656,7 @@ impl AnimationManager {
           + (prev_rect.width() - target_rect.width()).abs()
           + (prev_rect.height() - target_rect.height()).abs();
 
-        // Always in pixels: checked when the config is read
-        // (`AnimationsConfig::validate`).
-        #[allow(clippy::cast_possible_truncation)]
-        let threshold_px = move_config.trigger_threshold.amount as i32;
-
-        if distance <= threshold_px {
+        if distance <= move_config.trigger_threshold_px {
           return None;
         }
 
@@ -633,7 +664,7 @@ impl AnimationManager {
       }
     };
 
-    match effect.effect_type {
+    match effect.style {
       AnimationEffect::Slide => Some(AnimationPlan::Slide(effect.clone())),
       // Fades change the real window's opacity, which is only possible on
       // Windows.
@@ -656,7 +687,7 @@ impl AnimationManager {
         } else {
           Some(AnimationPlan::Live {
             effect: effect.clone(),
-            popin: effect.effect_type == AnimationEffect::Popin
+            popin: effect.style == AnimationEffect::Popin
               && !self.lives.contains_key(&window.id()),
           })
         }
@@ -694,7 +725,14 @@ impl AnimationManager {
     self.lives.insert(
       window_id,
       LiveState {
-        clock: AnimationClock::new(&request.effect, request.frame_rate),
+        clock: AnimationClock::new(
+          &request.effect.timing,
+          request.frame_rate,
+        ),
+        fade_clock: AnimationClock::for_fade(
+          &request.effect,
+          request.frame_rate,
+        ),
         window: request.window.native().clone(),
         start_frame: request.start_frame,
         target_frame: request.target_frame,
@@ -794,10 +832,11 @@ impl AnimationManager {
           state: CloseState {
             // Started once the snapshot is up, so its capture doesn't eat
             // into the animation.
-            clock: AnimationClock::new(effect, frame_rate),
+            clock: AnimationClock::new(&effect.timing, frame_rate),
+            fade_clock: AnimationClock::for_fade(effect, frame_rate),
             rect,
-            end_scale: if effect.effect_type == AnimationEffect::Popin {
-              CLOSE_END_SCALE
+            end_scale: if effect.style == AnimationEffect::Popin {
+              effect.popin_scale
             } else {
               1.0
             },
@@ -852,7 +891,10 @@ impl AnimationManager {
       );
 
       let slide = SlideState {
-        clock: AnimationClock::new(&request.effect, request.frame_rate),
+        clock: AnimationClock::new(
+          &request.effect.timing,
+          request.frame_rate,
+        ),
         start_rect,
         target_rect: request.target_rect,
       };
@@ -940,14 +982,14 @@ impl AnimationManager {
   pub fn start_fade(
     &mut self,
     window: &WindowContainer,
-    effect: &AnimationEffectConfig,
+    effect: &ResolvedEffect,
     target_opacity: OpacityValue,
     frame_rate: u32,
   ) {
     self.fades.insert(
       window.id(),
       FadeState {
-        clock: AnimationClock::new(effect, frame_rate),
+        clock: AnimationClock::for_fade(effect, frame_rate),
         window: window.native().clone(),
         target_opacity,
       },
@@ -1082,19 +1124,23 @@ impl AnimationManager {
 mod tests {
   use std::time::{Duration, Instant};
 
-  use wm_common::AnimationEffectConfig;
-  use wm_platform::{EasingFunction, Rect};
+  use wm_common::{AnimationEffect, AnimationTiming, ResolvedEffect};
+  use wm_platform::{CubicBezier, Easing, EasingPreset, Rect};
 
-  use super::{AnimationClock, CloseState, SlideState, CLOSE_END_SCALE};
+  use super::{AnimationClock, CloseState, SlideState};
 
-  fn clock(elapsed_ms: u64, duration_ms: u32) -> AnimationClock {
-    let config = AnimationEffectConfig {
+  fn timing(duration_ms: u32, easing: Easing) -> AnimationTiming {
+    AnimationTiming {
       duration_ms,
-      easing: EasingFunction::Linear,
-      ..AnimationEffectConfig::default()
-    };
+      easing,
+    }
+  }
 
-    let mut clock = AnimationClock::new(&config, 60);
+  fn clock_with(
+    elapsed_ms: u64,
+    timing: &AnimationTiming,
+  ) -> AnimationClock {
+    let mut clock = AnimationClock::new(timing, 60);
     clock.start_time = Instant::now()
       .checked_sub(Duration::from_millis(elapsed_ms))
       .unwrap_or_else(Instant::now);
@@ -1102,10 +1148,29 @@ mod tests {
     clock
   }
 
+  fn clock(elapsed_ms: u64, duration_ms: u32) -> AnimationClock {
+    clock_with(
+      elapsed_ms,
+      &timing(duration_ms, Easing::Preset(EasingPreset::Linear)),
+    )
+  }
+
   #[test]
   fn clock_completes_after_duration() {
     assert!(clock(250, 200).is_complete());
     assert!(!clock(0, 200).is_complete());
+  }
+
+  #[test]
+  fn instant_fade_is_over_at_once() {
+    let effect = ResolvedEffect {
+      style: AnimationEffect::Popin,
+      timing: timing(200, Easing::default()),
+      fade: None,
+      popin_scale: 0.9,
+    };
+
+    assert!(AnimationClock::for_fade(&effect, 60).is_complete());
   }
 
   #[test]
@@ -1119,10 +1184,32 @@ mod tests {
     assert_eq!(slide.current_rect(), slide.target_rect);
   }
 
+  #[test]
+  fn overshooting_slide_never_inverts_the_size() {
+    // Pulls far back before starting: the size would go below zero.
+    let curve =
+      CubicBezier::new([0.5, -3.0, 0.9, 1.0]).expect("valid bezier");
+
+    for elapsed in (0..200).step_by(10) {
+      let slide = SlideState {
+        clock: clock_with(
+          elapsed,
+          &timing(200, Easing::Bezier(curve.clone())),
+        ),
+        start_rect: Rect::from_xy(0, 0, 20, 20),
+        target_rect: Rect::from_xy(0, 0, 400, 400),
+      };
+
+      let rect = slide.current_rect();
+      assert!(rect.width() >= 1 && rect.height() >= 1, "{rect:?}");
+    }
+  }
+
   /// A close animation `elapsed_ms` into 160 ms, ending at `end_scale`.
   fn close(elapsed_ms: u64, end_scale: f32) -> CloseState {
     CloseState {
       clock: clock(elapsed_ms, 160),
+      fade_clock: clock(elapsed_ms, 160),
       rect: Rect::from_xy(0, 0, 1000, 800),
       end_scale,
     }
@@ -1130,7 +1217,7 @@ mod tests {
 
   #[test]
   fn close_starts_as_the_window() {
-    let (opacity, scale) = close(0, CLOSE_END_SCALE).current();
+    let (opacity, scale) = close(0, 0.95).current();
 
     assert!((opacity.0 - 1.0).abs() < 0.05);
     assert!((scale - 1.0).abs() < 0.01);
@@ -1138,10 +1225,24 @@ mod tests {
 
   #[test]
   fn close_ends_invisible_and_small() {
-    let (opacity, scale) = close(500, CLOSE_END_SCALE).current();
+    let closing = close(500, 0.95);
+    let (opacity, scale) = closing.current();
 
+    assert!(closing.is_complete());
     assert!(opacity.0.abs() < f32::EPSILON);
-    assert!((scale - CLOSE_END_SCALE).abs() < f32::EPSILON);
+    assert!((scale - 0.95).abs() < f32::EPSILON);
+  }
+
+  #[test]
+  fn close_waits_for_the_longer_of_shrink_and_fade() {
+    let closing = CloseState {
+      clock: clock(100, 80),
+      fade_clock: clock(100, 300),
+      rect: Rect::from_xy(0, 0, 100, 100),
+      end_scale: 0.95,
+    };
+
+    assert!(!closing.is_complete());
   }
 
   #[test]

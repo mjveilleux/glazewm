@@ -72,10 +72,30 @@ impl UserConfig {
 
     // TODO: Improve error formatting of serde_yaml errors. Something
     // similar to https://github.com/AlexanderThaller/format_serde_error
-    let config_value: ParsedConfig = serde_yaml::from_str(&config_str)?;
-    config_value.animations.validate()?;
+    let mut config_value: ParsedConfig =
+      serde_yaml::from_str(&config_str)?;
+    config_value.animations.resolve()?;
+    Self::warn_deprecated(&config_value);
 
     Ok((config_value, config_str))
+  }
+
+  /// Warns about deprecated config keys, once per run.
+  fn warn_deprecated(config: &ParsedConfig) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+
+    let keys = &config.animations.resolved().deprecated_keys;
+
+    if !keys.is_empty() {
+      WARNED.call_once(|| {
+        tracing::warn!(
+          "Deprecated config keys: `animations.{}`. Use `windows_in`, \
+           `windows_out` and `windows_move` (with `style` for \
+           `effect_type`) instead.",
+          keys.join("`, `animations.")
+        );
+      });
+    }
   }
 
   /// Initializes a new config file from the sample config resource.

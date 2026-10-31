@@ -14,7 +14,6 @@ use wm_platform::{OpacityValue, Rect, WindowZOrder};
 use crate::{
   animation_manager::{
     AnimationPlan, AnimationTrigger, LiveRequest, SlideRequest,
-    POPIN_START_SCALE,
   },
   models::{Container, WindowContainer},
   traits::{CommonGetters, PositionGetters, WindowGetters},
@@ -378,10 +377,13 @@ fn redraw_containers(
     // A live animation starts where the window is now (or, for a
     // pop-in, smaller at its target), and the window is placed there.
     let live = match &redraw.animation_plan {
-      Some(AnimationPlan::Live { effect, popin }) => {
-        live_frames(window, &redraw.target_rect, *popin, state)
-          .map(|(start, target)| (effect, *popin, start, target))
-      }
+      Some(AnimationPlan::Live { effect, popin }) => live_frames(
+        window,
+        &redraw.target_rect,
+        popin.then_some(effect.popin_scale),
+        state,
+      )
+      .map(|(start, target)| (effect, *popin, start, target)),
       _ => None,
     };
 
@@ -559,7 +561,7 @@ fn resting_opacity(
 fn live_frames(
   window: &WindowContainer,
   target_rect: &Rect,
-  popin: bool,
+  popin_scale: Option<f32>,
   state: &WmState,
 ) -> Option<(Rect, Rect)> {
   let target_frame =
@@ -569,9 +571,9 @@ fn live_frames(
     state.animation_manager.live_frame(&window.id())
   {
     frame
-  } else if popin {
+  } else if let Some(popin_scale) = popin_scale {
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-    let scale = |length: i32| (length as f32 * POPIN_START_SCALE) as i32;
+    let scale = |length: i32| (length as f32 * popin_scale) as i32;
 
     let width = scale(target_frame.width());
     let height = scale(target_frame.height());

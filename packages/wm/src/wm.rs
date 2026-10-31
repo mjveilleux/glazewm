@@ -182,7 +182,7 @@ impl WindowManager {
       // to turn around.
       !state.pending_sync.open_animation_windows().is_empty()
         && config.value.animations.move_effect().is_some_and(|m| {
-          m.effect.effect_type == wm_common::AnimationEffect::Slide
+          m.effect.style == wm_common::AnimationEffect::Slide
         })
         && crate::animation_manager::hides_new_windows(config)
     }

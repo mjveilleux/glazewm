@@ -2,6 +2,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod active_drag;
+mod animations_config;
 mod app_command;
 mod display_state;
 mod dtos;
@@ -14,6 +15,7 @@ mod window_state;
 mod wm_event;
 
 pub use active_drag::*;
+pub use animations_config::*;
 pub use app_command::*;
 pub use display_state::*;
 pub use dtos::*;

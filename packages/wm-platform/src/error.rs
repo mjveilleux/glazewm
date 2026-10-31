@@ -96,6 +96,12 @@ pub enum ParseError {
   )]
   Color(String),
 
+  #[error(
+    "Invalid cubic bezier {0}: needs four finite numbers, the first and \
+     third (x) between 0 and 1."
+  )]
+  Bezier(String),
+
   #[error("Invalid delta value: {0}")]
   Delta(String),
 
