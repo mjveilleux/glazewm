@@ -188,6 +188,24 @@ window_rules:
         window_class: { not_regex: 'PPTFrameClass' }
       - window_process: { equals: 'CleanShot X' }
 
+  # Give matching windows a border color of their own, in place of the
+  # `window_effects` border colors. `--unfocused` sets a different color
+  # while the window doesn't have focus, and `set-border-color --reset`
+  # returns to the `window_effects` colors. Quote the command, since `#`
+  # otherwise starts a YAML comment. With `run_once: false`, a pair of
+  # rules follows a window whose title changes (e.g. a terminal's tab).
+  # ** Exclusive to Windows 11 due to API limitations.
+  # - commands: ['set-border-color #a6e3a1 --unfocused #40a02b']
+  #   match:
+  #     - window_process: { equals: 'WindowsTerminal' }
+  #       window_title: { regex: '@.*:' }
+  #   run_once: false
+  # - commands: ['set-border-color --reset']
+  #   match:
+  #     - window_process: { equals: 'WindowsTerminal' }
+  #       window_title: { not_regex: '@.*:' }
+  #   run_once: false
+
 binding_modes:
   # When enabled, the focused window can be resized via arrow keys or HJKL.
   - name: 'resize'

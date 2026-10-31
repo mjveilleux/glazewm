@@ -1,14 +1,14 @@
 use anyhow::Context;
 #[cfg(target_os = "windows")]
-use wm_common::WindowEffectConfig;
+use wm_common::{resolve_border_color, WindowEffectConfig};
 use wm_common::{
   CursorJumpTrigger, DisplayState, HideCorner, HideMethod, UniqueExt,
   WindowState, WmEvent,
 };
 #[cfg(target_os = "windows")]
-use wm_platform::CornerStyle;
-#[cfg(target_os = "windows")]
 use wm_platform::NativeWindowWindowsExt;
+#[cfg(target_os = "windows")]
+use wm_platform::{Color, CornerStyle};
 use wm_platform::{OpacityValue, Rect, WindowZOrder};
 
 use crate::{
@@ -82,6 +82,32 @@ pub fn platform_sync(
         state.animation_manager.is_hidden(&window.id());
       apply_window_effects(&window, false, is_animation_hidden, config);
     }
+  }
+
+  // Windows whose own effect settings changed. Skip any already updated
+  // above, and any no longer managed.
+  let windows_to_update_effects =
+    if state.pending_sync.needs_all_effects_update() {
+      Vec::new()
+    } else {
+      state
+        .pending_sync
+        .windows_to_update_effects()
+        .iter()
+        .filter(|id| {
+          !(state.pending_sync.needs_focused_effect_update()
+            && **id == focused_container.id())
+        })
+        .filter_map(|id| state.container_by_id(*id))
+        .filter_map(|container| container.as_window_container().ok())
+        .collect::<Vec<_>>()
+    };
+
+  for window in windows_to_update_effects {
+    let is_focused = window.id() == focused_container.id();
+    let is_animation_hidden =
+      state.animation_manager.is_hidden(&window.id());
+    apply_window_effects(&window, is_focused, is_animation_hidden, config);
   }
 
   state.pending_sync.clear();
@@ -798,6 +824,16 @@ fn apply_window_effects(
     &window_effects.other_windows
   };
 
+  // Border colors are left at the system default unless the config or
+  // the window's own override (`set-border-color`) sets them.
+  #[cfg(target_os = "windows")]
+  let border_override = window.border_color_override();
+
+  #[cfg(target_os = "windows")]
+  let manages_border = border_override.is_some()
+    || window_effects.focused_window.border.enabled
+    || window_effects.other_windows.border.enabled;
+
   // Fullscreen windows cover the entire monitor, so DWM decorations
   // (border color, rounded corners, transparency) would be drawn on top
   // of them. Windows suppresses these for maximized windows, but not for
@@ -808,9 +844,7 @@ fn apply_window_effects(
   // stay hidden.
   #[cfg(target_os = "windows")]
   if !should_apply_window_effects(&window.state()) {
-    if window_effects.focused_window.border.enabled
-      || window_effects.other_windows.border.enabled
-    {
+    if manages_border {
       _ = window.native().set_border_color(None);
     }
 
@@ -835,12 +869,18 @@ fn apply_window_effects(
     return;
   }
 
-  // Skip if both focused + non-focused window effects are disabled.
+  // Skip if both focused + non-focused border effects are disabled and
+  // the window has no border color of its own.
   #[cfg(target_os = "windows")]
-  if window_effects.focused_window.border.enabled
-    || window_effects.other_windows.border.enabled
-  {
-    apply_border_effect(window, effect_config);
+  if manages_border {
+    apply_border_effect(
+      window,
+      resolve_border_color(
+        border_override.as_ref(),
+        effect_config,
+        is_focused,
+      ),
+    );
   }
 
   #[cfg(target_os = "windows")]
@@ -910,17 +950,13 @@ mod tests {
   }
 }
 
+/// Sets a window's border color, or resets it to the system default with
+/// `None`.
 #[cfg(target_os = "windows")]
 fn apply_border_effect(
   window: &WindowContainer,
-  effect_config: &WindowEffectConfig,
+  border_color: Option<&Color>,
 ) {
-  let border_color = if effect_config.border.enabled {
-    Some(&effect_config.border.color)
-  } else {
-    None
-  };
-
   _ = window.native().set_border_color(border_color);
 
   let native = window.native().clone();

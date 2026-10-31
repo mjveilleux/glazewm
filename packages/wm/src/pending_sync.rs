@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
@@ -30,6 +30,11 @@ pub struct PendingSync {
   /// Whether window effects for all windows should be updated.
   needs_all_effects_update: bool,
 
+  /// IDs of windows whose own effect settings changed (e.g. through the
+  /// `set-border-color` command), and whose effects should be updated
+  /// whether or not they have focus.
+  windows_to_update_effects: HashSet<Uuid>,
+
   /// Whether to jump the cursor to the focused container (if enabled in
   /// user config).
   needs_cursor_jump: bool,
@@ -46,6 +51,7 @@ impl PendingSync {
       || self.needs_focus_update
       || self.needs_focused_effect_update
       || self.needs_all_effects_update
+      || !self.windows_to_update_effects.is_empty()
       || self.needs_cursor_jump
   }
 
@@ -56,6 +62,7 @@ impl PendingSync {
     self.needs_focus_update = false;
     self.needs_focused_effect_update = false;
     self.needs_all_effects_update = false;
+    self.windows_to_update_effects.clear();
     self.needs_cursor_jump = false;
     self.skip_animations = false;
     self
@@ -128,6 +135,18 @@ impl PendingSync {
     self
   }
 
+  /// Queues an effects update for one window, focused or not.
+  ///
+  /// The window is looked up by ID at sync time, so that it is still
+  /// found if it changes state (e.g. tiling to floating) in between.
+  pub fn queue_window_effects_update(
+    &mut self,
+    window: &WindowContainer,
+  ) -> &mut Self {
+    self.windows_to_update_effects.insert(window.id());
+    self
+  }
+
   pub fn queue_cursor_jump(&mut self) -> &mut Self {
     self.needs_cursor_jump = true;
     self
@@ -156,6 +175,11 @@ impl PendingSync {
 
   pub fn needs_cursor_jump(&self) -> bool {
     self.needs_cursor_jump
+  }
+
+  /// IDs of windows queued with `queue_window_effects_update`.
+  pub fn windows_to_update_effects(&self) -> &HashSet<Uuid> {
+    &self.windows_to_update_effects
   }
 
   pub fn containers_to_redraw(&self) -> &HashMap<Uuid, Container> {

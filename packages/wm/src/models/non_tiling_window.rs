@@ -7,8 +7,8 @@ use std::{
 use anyhow::Context;
 use uuid::Uuid;
 use wm_common::{
-  ActiveDrag, ContainerDto, DisplayState, GapsConfig, WindowDto,
-  WindowRuleConfig, WindowState,
+  ActiveDrag, BorderColorOverride, ContainerDto, DisplayState, GapsConfig,
+  WindowDto, WindowRuleConfig, WindowState,
 };
 use wm_platform::{NativeWindow, Rect, RectDelta};
 
@@ -42,6 +42,7 @@ struct NonTilingWindowInner {
   has_custom_floating_placement: bool,
   done_window_rules: Vec<WindowRuleConfig>,
   active_drag: Option<ActiveDrag>,
+  border_color_override: Option<BorderColorOverride>,
 }
 
 impl NonTilingWindow {
@@ -76,6 +77,7 @@ impl NonTilingWindow {
       has_custom_floating_placement,
       done_window_rules,
       active_drag,
+      border_color_override: None,
     };
 
     Self(Rc::new(RefCell::new(window)))
@@ -99,7 +101,7 @@ impl NonTilingWindow {
       Some(self.state())
     };
 
-    TilingWindow::new(
+    let window = TilingWindow::new(
       Some(self.id()),
       self.native().clone(),
       self.native_properties().clone(),
@@ -110,7 +112,10 @@ impl NonTilingWindow {
       gaps_config,
       self.done_window_rules(),
       self.active_drag(),
-    )
+    );
+
+    window.set_border_color_override(self.border_color_override());
+    window
   }
 
   pub fn to_dto(&self) -> anyhow::Result<ContainerDto> {

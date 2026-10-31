@@ -1,7 +1,10 @@
 use std::cell::Ref;
 
 use ambassador::delegatable_trait;
-use wm_common::{ActiveDrag, DisplayState, WindowRuleConfig, WindowState};
+use wm_common::{
+  ActiveDrag, BorderColorOverride, DisplayState, WindowRuleConfig,
+  WindowState,
+};
 use wm_platform::{LengthValue, NativeWindow, Rect, RectDelta};
 
 use crate::{
@@ -164,6 +167,16 @@ pub trait WindowGetters: CommonGetters {
 
   fn set_active_drag(&self, active_drag: Option<ActiveDrag>);
 
+  /// Gets the border colors set with the `set-border-color` command, if
+  /// any. They take precedence over the `window_effects` border colors.
+  fn border_color_override(&self) -> Option<BorderColorOverride>;
+
+  /// Sets or clears (with `None`) the window's border color override.
+  fn set_border_color_override(
+    &self,
+    border_color_override: Option<BorderColorOverride>,
+  );
+
   /// Gets the cached native window properties.
   fn native_properties(&self) -> NativeWindowProperties;
 
@@ -177,7 +190,8 @@ pub trait WindowGetters: CommonGetters {
 ///
 /// Expects that the struct has a wrapping `RefCell` containing a struct
 /// with a `state`, `prev_state`, `native`, `has_pending_dpi_adjustment`,
-/// `border_delta`, `display_state`, and a `done_window_rules` field.
+/// `border_delta`, `display_state`, `done_window_rules`, and a
+/// `border_color_override` field.
 #[macro_export]
 macro_rules! impl_window_getters {
   ($struct_name:ident) => {
@@ -269,6 +283,17 @@ macro_rules! impl_window_getters {
 
       fn set_active_drag(&self, active_drag: Option<ActiveDrag>) {
         self.0.borrow_mut().active_drag = active_drag;
+      }
+
+      fn border_color_override(&self) -> Option<BorderColorOverride> {
+        self.0.borrow().border_color_override.clone()
+      }
+
+      fn set_border_color_override(
+        &self,
+        border_color_override: Option<BorderColorOverride>,
+      ) {
+        self.0.borrow_mut().border_color_override = border_color_override;
       }
 
       fn native_properties(&self) -> NativeWindowProperties {

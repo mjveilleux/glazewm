@@ -29,8 +29,8 @@ use crate::{
     monitor::focus_monitor,
     window::{
       ignore_window, move_window_in_direction, move_window_to_workspace,
-      resize_window, set_window_position, set_window_size,
-      update_window_state, WindowPositionTarget,
+      resize_window, set_border_color, set_window_position,
+      set_window_size, update_window_state, WindowPositionTarget,
     },
     workspace::{
       focus_workspace, move_workspace_in_direction,
@@ -734,6 +734,13 @@ impl WindowManager {
           }
           _ => Ok(()),
         }
+      }
+      InvokeCommand::SetBorderColor(args) => {
+        if let Ok(window) = subject_container.as_window_container() {
+          set_border_color(&window, args, state, config);
+        }
+
+        Ok(())
       }
       InvokeCommand::SetTitleBarVisibility {
         // LINT: `visibility` is only used on Windows.

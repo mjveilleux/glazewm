@@ -45,6 +45,7 @@ try {
         'emit'                     # `emit <name> [args]`: a `custom` event for IPC subscribers
         'animations.enabled'       # `animations.enabled: false` keeps the settings, animates nothing
         'animations.window_close'  # the close command's fade / pop-out
+        'set_border_color'         # `set-border-color <hex> [--unfocused <hex>]` / `--reset`: a window's own border color, over window_effects
     ) | Set-Content (Join-Path $stage 'omawin-features.txt') -Encoding ascii
     $zipName = "glazewm-$Version-windows-x64.zip"
     $zip = Join-Path $out $zipName
@@ -57,5 +58,5 @@ try {
     if ($NoPublish) { return }
     $commit = git rev-parse HEAD
     gh release create "v$Version" $zip $sums --repo mjveilleux/glazewm --target $commit --title "GlazeWM $Version" `
-        --notes "omawin's GlazeWM ($commit, based on v$Base): window animations (open, move, close; animations.enabled), the emit command for IPC subscribers, and it starts without the taskbar (the tray icon is added once Explorer's taskbar exists, instead of aborting), so it can start the moment you sign in. omawin-features.txt lists what omawin may use. Unsigned: omawin signs it on each PC (install/glazewm-fork.ps1). Verify with SHA256SUMS-windows-x64.txt."
+        --notes "omawin's GlazeWM ($commit, based on v$Base): window animations (open, move, close; animations.enabled), the emit command for IPC subscribers, per-window border colors (set-border-color), and it starts without the taskbar (the tray icon is added once Explorer's taskbar exists, instead of aborting), so it can start the moment you sign in. omawin-features.txt lists what omawin may use. Unsigned: omawin signs it on each PC (install/glazewm-fork.ps1). Verify with SHA256SUMS-windows-x64.txt."
 } finally { Pop-Location }

@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Color {
   pub r: u8,
   pub g: u8,
@@ -24,25 +24,30 @@ impl FromStr for Color {
   type Err = crate::ParseError;
 
   fn from_str(unparsed: &str) -> Result<Self, crate::ParseError> {
-    let mut chars = unparsed.chars();
+    let invalid = || crate::ParseError::Color(unparsed.to_string());
 
-    if chars.next() != Some('#') {
-      return Err(crate::ParseError::Color(unparsed.to_string()));
+    // Check the shape before slicing, so that short or non-ASCII input
+    // (e.g. a typo in a command) is an error rather than a panic.
+    let hex = unparsed.strip_prefix('#').ok_or_else(invalid)?;
+
+    if !matches!(hex.len(), 6 | 8)
+      || !hex.chars().all(|char| char.is_ascii_hexdigit())
+    {
+      return Err(invalid());
     }
 
     let parse_hex = |slice: &str| -> Result<u8, crate::ParseError> {
-      u8::from_str_radix(slice, 16)
-        .map_err(|_| crate::ParseError::Color(unparsed.to_string()))
+      u8::from_str_radix(slice, 16).map_err(|_| invalid())
     };
 
-    let r = parse_hex(&unparsed[1..3])?;
-    let g = parse_hex(&unparsed[3..5])?;
-    let b = parse_hex(&unparsed[5..7])?;
+    let r = parse_hex(&hex[0..2])?;
+    let g = parse_hex(&hex[2..4])?;
+    let b = parse_hex(&hex[4..6])?;
 
-    let a = match unparsed.len() {
-      9 => parse_hex(&unparsed[7..9])?,
-      7 => 255,
-      _ => return Err(crate::ParseError::Color(unparsed.to_string())),
+    let a = if hex.len() == 8 {
+      parse_hex(&hex[6..8])?
+    } else {
+      255
     };
 
     Ok(Self { r, g, b, a })
@@ -67,6 +72,44 @@ impl<'de> Deserialize<'de> for Color {
       ColorDe::String(str) => {
         Self::from_str(&str).map_err(serde::de::Error::custom)
       }
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::str::FromStr;
+
+  use super::Color;
+
+  #[test]
+  fn parses_rgb_and_rgba_hex() {
+    assert_eq!(
+      Color::from_str("#a6e3a1").ok(),
+      Some(Color {
+        r: 0xa6,
+        g: 0xe3,
+        b: 0xa1,
+        a: 0xff,
+      })
+    );
+    assert_eq!(
+      Color::from_str("#A6E3A180").ok(),
+      Some(Color {
+        r: 0xa6,
+        g: 0xe3,
+        b: 0xa1,
+        a: 0x80,
+      })
+    );
+  }
+
+  #[test]
+  fn rejects_malformed_hex_without_panicking() {
+    for input in [
+      "", "#", "#a6", "a6e3a1", "#a6e3a", "#a6e3a1f", "#gggggg", "#a6e3é1",
+    ] {
+      assert!(Color::from_str(input).is_err(), "{input} should fail");
     }
   }
 }

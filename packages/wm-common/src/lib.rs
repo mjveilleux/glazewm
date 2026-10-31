@@ -3,6 +3,7 @@
 
 mod active_drag;
 mod app_command;
+mod border_color_override;
 mod display_state;
 mod dtos;
 mod hide_corner;
@@ -15,6 +16,7 @@ mod wm_event;
 
 pub use active_drag::*;
 pub use app_command::*;
+pub use border_color_override::*;
 pub use display_state::*;
 pub use dtos::*;
 pub use hide_corner::*;

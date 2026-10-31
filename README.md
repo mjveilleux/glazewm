@@ -303,6 +303,27 @@ window_effects:
       color: "#d3d3d3"
 ```
 
+A window can also get a border color of its own with the `set-border-color` command, which takes precedence over `window_effects` (and applies even when its borders are disabled). It acts on the focused window, or on the window matched by a window rule:
+
+- `set-border-color <color>`: the border color for the window, focused or not (`#RRGGBB` or `#RRGGBBAA`).
+- `set-border-color <color> --unfocused <color>`: a different color while the window doesn't have focus.
+- `set-border-color --reset`: back to the `window_effects` colors.
+
+```yaml
+window_rules:
+  # Quote the command, since `#` otherwise starts a YAML comment. With
+  # `run_once: false`, the pair of rules follows the window as its title
+  # changes.
+  - commands: ["set-border-color #a6e3a1 --unfocused #40a02b"]
+    match:
+      - window_title: { regex: "@.*:" }
+    run_once: false
+  - commands: ["set-border-color --reset"]
+    match:
+      - window_title: { not_regex: "@.*:" }
+    run_once: false
+```
+
 ### Config: Window behavior
 
 The `window_behavior` config option exists to customize the states that a window can be in (`tiling`, `floating`, `minimized`, and `fullscreen`).

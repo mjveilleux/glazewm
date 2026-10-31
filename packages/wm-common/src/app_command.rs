@@ -4,7 +4,7 @@ use clap::{error::KindFormatter, Args, Parser, ValueEnum};
 use serde::{Deserialize, Deserializer, Serialize};
 use tracing::Level;
 use uuid::Uuid;
-use wm_platform::{Delta, Direction, LengthValue, OpacityValue};
+use wm_platform::{Color, Delta, Direction, LengthValue, OpacityValue};
 
 use crate::TilingDirection;
 
@@ -186,6 +186,10 @@ pub enum InvokeCommand {
     #[clap(flatten)]
     new_config: InvokeUpdateWorkspaceConfig,
   },
+  /// Sets the border color of the subject window, in place of the
+  /// `window_effects` border colors (e.g. `set-border-color #a6e3a1` in a
+  /// window rule).
+  SetBorderColor(SetBorderColorCommand),
   SetFloating {
     #[clap(long, default_missing_value = "true", require_equals = true, num_args = 0..=1)]
     shown_on_top: Option<bool>,
@@ -433,6 +437,24 @@ pub struct SetTransparencyCommand {
 }
 
 #[derive(Args, Clone, Debug, PartialEq, Serialize)]
+pub struct SetBorderColorCommand {
+  /// Border color while the window has focus, as `#RRGGBB` or
+  /// `#RRGGBBAA`. Also used while unfocused, unless `--unfocused` is
+  /// given.
+  #[clap(required_unless_present = "reset")]
+  pub color: Option<Color>,
+
+  /// Border color while the window doesn't have focus.
+  #[clap(long, requires = "color")]
+  pub unfocused: Option<Color>,
+
+  /// Clears the window's border color, so that the `window_effects`
+  /// border colors apply again.
+  #[clap(long, action, conflicts_with_all = ["color", "unfocused"])]
+  pub reset: bool,
+}
+
+#[derive(Args, Clone, Debug, PartialEq, Serialize)]
 #[group(required = true, multiple = true)]
 pub struct InvokePositionCommand {
   #[clap(long, action)]
@@ -466,8 +488,11 @@ mod tests {
   use std::iter;
 
   use clap::Parser;
+  use wm_platform::Color;
 
-  use super::{AppCommand, InvokeCommand, SubscribableEvent};
+  use super::{
+    AppCommand, InvokeCommand, SetBorderColorCommand, SubscribableEvent,
+  };
 
   /// Parses a command the way the user config does (see `Deserialize`).
   fn parse(command: &str) -> InvokeCommand {
@@ -542,5 +567,82 @@ mod tests {
     assert!(parse("emit omawin launcher").runs_while_paused());
     assert!(!parse("close").runs_while_paused());
     assert!(!parse("shell-exec omawin.exe launcher").runs_while_paused());
+  }
+
+  /// Builds an opaque color from its RGB components.
+  fn rgb(r: u8, g: u8, b: u8) -> Color {
+    Color { r, g, b, a: 255 }
+  }
+
+  #[test]
+  fn set_border_color_takes_a_color() {
+    assert_eq!(
+      parse("set-border-color #a6e3a1"),
+      InvokeCommand::SetBorderColor(SetBorderColorCommand {
+        color: Some(rgb(0xa6, 0xe3, 0xa1)),
+        unfocused: None,
+        reset: false,
+      })
+    );
+  }
+
+  #[test]
+  fn set_border_color_takes_an_unfocused_color() {
+    assert_eq!(
+      parse("set-border-color #a6e3a1 --unfocused #40a02b80"),
+      InvokeCommand::SetBorderColor(SetBorderColorCommand {
+        color: Some(rgb(0xa6, 0xe3, 0xa1)),
+        unfocused: Some(Color {
+          r: 0x40,
+          g: 0xa0,
+          b: 0x2b,
+          a: 0x80,
+        }),
+        reset: false,
+      })
+    );
+  }
+
+  #[test]
+  fn set_border_color_resets() {
+    assert_eq!(
+      parse("set-border-color --reset"),
+      InvokeCommand::SetBorderColor(SetBorderColorCommand {
+        color: None,
+        unfocused: None,
+        reset: true,
+      })
+    );
+  }
+
+  #[test]
+  fn set_border_color_rejects_bad_input() {
+    for command in [
+      "set-border-color",
+      "set-border-color a6e3a1",
+      "set-border-color #a6e3a",
+      "set-border-color #zzzzzz",
+      "set-border-color --unfocused #a6e3a1",
+      "set-border-color #a6e3a1 --unfocused",
+      "set-border-color #a6e3a1 --reset",
+      "set-border-color --reset --unfocused #a6e3a1",
+    ] {
+      assert!(
+        InvokeCommand::try_parse_from(
+          iter::once("").chain(command.split_whitespace())
+        )
+        .is_err(),
+        "{command} should fail"
+      );
+    }
+  }
+
+  #[test]
+  fn set_border_color_parses_from_the_config() {
+    let command: InvokeCommand =
+      serde_json::from_str("\"set-border-color #a6e3a1\"")
+        .expect("config command should parse");
+
+    assert_eq!(command, parse("set-border-color #a6e3a1"));
   }
 }
