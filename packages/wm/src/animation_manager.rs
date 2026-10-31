@@ -44,6 +44,8 @@ pub const POPIN_START_SCALE: f32 = 0.87;
 
 /// Size a closing window's pop-out ends at, relative to the window's
 /// (Omarchy's `windowsOut`, `popin 95%`).
+// LINT: Close animations are only started on Windows.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub const CLOSE_END_SCALE: f32 = 0.95;
 
 pub enum AnimationTrigger {
