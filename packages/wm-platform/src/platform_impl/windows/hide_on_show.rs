@@ -212,25 +212,6 @@ fn unpack(value: isize) -> HiddenOnShow {
   }
 }
 
-#[cfg(test)]
-mod tests {
-  use super::{pack, unpack};
-  use crate::HiddenOnShow;
-
-  #[test]
-  fn mark_values_round_trip() {
-    for (was_layered, alpha) in [(false, 255), (true, 0), (true, 200)] {
-      let state = HiddenOnShow { was_layered, alpha };
-      let value = pack(state);
-      let unpacked = unpack(value);
-
-      assert_ne!(value, 0);
-      assert_eq!(unpacked.was_layered, was_layered);
-      assert_eq!(unpacked.alpha, alpha);
-    }
-  }
-}
-
 /// Removes `WS_EX_LAYERED` from a window and has it repaint, which makes
 /// it fully opaque again.
 fn remove_layered_style(handle: isize) {
@@ -249,6 +230,25 @@ fn remove_layered_style(handle: isize) {
         None,
         RDW_ERASE | RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN,
       );
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{pack, unpack};
+  use crate::HiddenOnShow;
+
+  #[test]
+  fn mark_values_round_trip() {
+    for (was_layered, alpha) in [(false, 255), (true, 0), (true, 200)] {
+      let state = HiddenOnShow { was_layered, alpha };
+      let value = pack(state);
+      let unpacked = unpack(value);
+
+      assert_ne!(value, 0);
+      assert_eq!(unpacked.was_layered, was_layered);
+      assert_eq!(unpacked.alpha, alpha);
     }
   }
 }
