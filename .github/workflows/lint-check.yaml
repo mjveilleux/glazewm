@@ -40,8 +40,11 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       # Unit tests. wm-platform's own suite drives the real desktop, so it
-      # only runs its unit tests.
+      # only runs its unit tests, and only on Windows: on macOS some need the
+      # main thread, which the standard test runner doesn't give them.
       - name: Unit tests
-        run: |
-          cargo test -p wm-common -p wm
-          cargo test -p wm-platform --lib
+        run: cargo test -p wm-common -p wm
+
+      - name: Unit tests (wm-platform)
+        if: runner.os == 'Windows'
+        run: cargo test -p wm-platform --lib
