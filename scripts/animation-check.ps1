@@ -130,12 +130,15 @@ if (-not $ready) {
 }
 Write-Event 'glazewm ready'
 
-# With $env:FFMPEG set (the workflow does), the screen is also recorded as video at up to 60 fps,
-# with each frame's real time kept, to out\screen.mp4.
+# With $env:FFMPEG set (the workflow does), the screen is recorded as video at up to 60 fps, with
+# each frame's real time kept, to out\screen.mp4, and the frames for the contact sheets are cut
+# from it afterwards. Otherwise screenshots are taken in a loop. Only one of the two runs: on a
+# machine without a GPU, both together halve the frames the compositor manages.
 $ffmpeg = $null
 if ($env:FFMPEG -and (Test-Path $env:FFMPEG)) {
     $ffmpegInfo = New-Object System.Diagnostics.ProcessStartInfo $env:FFMPEG
-    $ffmpegInfo.Arguments = "-y -loglevel warning -f gdigrab -framerate 60 -draw_mouse 0 -i desktop " +
+    # Info level for the input's start time (wall clock), which places the frames in time.
+    $ffmpegInfo.Arguments = "-y -loglevel info -nostats -f gdigrab -framerate 60 -draw_mouse 0 -i desktop " +
         "-fps_mode passthrough -c:v libx264 -preset ultrafast -crf 20 -pix_fmt yuv420p `"$Out\screen.mp4`""
     $ffmpegInfo.UseShellExecute = $false
     $ffmpegInfo.RedirectStandardInput = $true
@@ -144,7 +147,10 @@ if ($env:FFMPEG -and (Test-Path $env:FFMPEG)) {
     $ffmpegErrors = $ffmpeg.StandardError.ReadToEndAsync()
 }
 
-$rec = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "`"$recorder`"", "`"$Out\frames`"", $start, 30 -PassThru -WindowStyle Hidden
+$rec = $null
+if (-not $ffmpeg) {
+    $rec = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "`"$recorder`"", "`"$Out\frames`"", $start, 30 -PassThru -WindowStyle Hidden
+}
 Start-Sleep -Seconds 1
 
 Add-Type @'
@@ -221,13 +227,32 @@ Start-Sleep -Seconds $pause
 Save-State 'move'
 
 Write-Event 'done'
-$rec | Wait-Process -Timeout 40 -ErrorAction SilentlyContinue
+if ($rec) { $rec | Wait-Process -Timeout 40 -ErrorAction SilentlyContinue }
 if ($ffmpeg) {
+    Start-Sleep -Seconds 1
     # 'q' asks ffmpeg to finish the file.
     $ffmpeg.StandardInput.Write('q')
     $ffmpeg.StandardInput.Close()
     if (-not $ffmpeg.WaitForExit(20000)) { $ffmpeg.Kill() }
     $ffmpegErrors.Result | Set-Content "$Out\ffmpeg.log"
+
+    # The frames, as JPEGs named by milliseconds since the start like the screenshots: the
+    # input's start (unix seconds) places frame 0, and showinfo gives each frame's time after it.
+    $videoStart = Select-String -Path "$Out\ffmpeg.log" -Pattern 'start: ([0-9.]+)' | Select-Object -First 1
+    if ($videoStart -and (Test-Path "$Out\screen.mp4")) {
+        $offsetMs = [double]$videoStart.Matches[0].Groups[1].Value * 1000 - $start
+        $cut = "$Out\cut"
+        New-Item -ItemType Directory -Force $cut | Out-Null
+        $info = & $env:FFMPEG -hide_banner -i "$Out\screen.mp4" -vf showinfo -fps_mode passthrough -q:v 4 "$cut\%06d.jpg" 2>&1 |
+            Select-String -Pattern 'n:\s*(\d+).*pts_time:([0-9.]+)'
+        foreach ($frame in $info) {
+            $index = [int]$frame.Matches[0].Groups[1].Value + 1
+            $ms = [int]($offsetMs + [double]$frame.Matches[0].Groups[2].Value * 1000)
+            $file = '{0}\{1:D6}.jpg' -f $cut, $index
+            if ($ms -ge 0 -and (Test-Path $file)) { Move-Item $file ('{0}\frames\{1:D6}.jpg' -f $Out, $ms) -Force }
+        }
+        Remove-Item $cut -Recurse -Force
+    }
 }
 
 # What's on screen once everything has settled.
