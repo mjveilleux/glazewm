@@ -14,6 +14,12 @@
     One Notepad is closed with GlazeWM's close command, the close animation's only trigger: its
     snapshot must be up right after the command and gone once the animation has had its time.
     With -Disabled the config says animations.enabled: false, and no overlay may appear at all.
+    Once settled, each Notepad must be fully opaque and where GlazeWM says it is (its visible
+    frame, DWM's extended frame bounds, against the window's place in `query windows`).
+
+    -Config runs a config of your own instead (omawin's, rendered from its template: its CI does);
+    -DurationMs then only sets how long each step waits, and -Disabled says what to expect
+    (animations.enabled: false in that config).
 #>
 param(
     [string]$Bin = 'target\release',
@@ -23,8 +29,10 @@ param(
     [int]$OpenMs = 0,
     # The fade-out of closed windows; 80% of the slides when left out (exits are quicker).
     [int]$CloseMs = 0,
-    # animations.enabled: false, with every other setting kept.
-    [switch]$Disabled
+    # animations.enabled: false, with every other setting kept (with -Config: that the config says so).
+    [switch]$Disabled,
+    # A whole config to run instead of the one written below (copied into the output as config.yaml).
+    [string]$Config
 )
 $ErrorActionPreference = 'Stop'
 if ($OpenMs -le 0) { $OpenMs = $DurationMs }
@@ -35,8 +43,11 @@ $Out = (Resolve-Path $Out).Path
 $glazewm = (Resolve-Path "$Bin\glazewm.exe").Path
 $cli = (Resolve-Path "$Bin\glazewm-cli.exe").Path
 
-# Animations only, everything else default; slowed so each one spans many frames.
+# Animations only, everything else default; slowed so each one spans many frames. Or the one asked for.
 $config = Join-Path $Out 'config.yaml'
+if ($Config) {
+    Copy-Item -LiteralPath (Resolve-Path -LiteralPath $Config).Path $config -Force
+} else {
 @"
 general:
   hide_method: 'cloak'
@@ -62,6 +73,7 @@ animations:
     duration_ms: $OpenMs
     easing: 'ease_out_cubic'
 "@ | Set-Content $config -Encoding utf8
+}
 
 $start = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 function Write-Event($text) {
@@ -142,6 +154,8 @@ public static class Win {
   [DllImport("user32.dll")] public static extern bool GetLayeredWindowAttributes(IntPtr hwnd, out uint key, out byte alpha, out uint flags);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+  // DWMWA_EXTENDED_FRAME_BOUNDS (9): the visible frame, without the invisible resize borders.
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT rect, int size);
   public static List<IntPtr> All() {
     var list = new List<IntPtr>();
     EnumWindows((h, l) => { list.Add(h); return true; }, IntPtr.Zero);
@@ -210,6 +224,10 @@ $overlays = Get-Overlays
 $lines += "animation overlays left: $(@($overlays).Count)"
 if (@($overlays).Count) { $failed = $true }
 $alive = $notepads | Where-Object { -not $_.HasExited } | ForEach-Object { $_.Id }
+# Where GlazeWM placed each window (its rect is the visible frame, grown by any border_delta).
+$placed = @{}
+foreach ($w in (& $cli query windows | ConvertFrom-Json).data.windows) { $placed[[long]$w.handle] = $w }
+function Get-Px($length) { if ($length -and $length.unit -eq 'pixel') { [int][Math]::Round($length.amount) } else { 0 } }
 foreach ($hwnd in [Win]::All()) {
     $procId = 0
     [void][Win]::GetWindowThreadProcessId($hwnd, [ref]$procId)
@@ -221,6 +239,18 @@ foreach ($hwnd in [Win]::All()) {
     if ($layered) { $key = 0; $a = [byte]0; $flags = 0; if ([Win]::GetLayeredWindowAttributes($hwnd, [ref]$key, [ref]$a, [ref]$flags)) { $alpha = $a } }
     if ($alpha -ne 255) { $failed = $true }
     $lines += "notepad pid $procId at ($($rect.Left),$($rect.Top))-($($rect.Right),$($rect.Bottom)) layered=$layered alpha=$alpha"
+    # Where it ended against where GlazeWM put it: a slide that stopped short, or a snapshot's
+    # window left at its old place, shows here. 2 px for DPI rounding.
+    $w = $placed[$hwnd.ToInt64()]
+    $frame = New-Object Win+RECT
+    if (-not $w) { $lines += "  not in GlazeWM's window list"; $failed = $true; continue }
+    if ([Win]::DwmGetWindowAttribute($hwnd, 9, [ref]$frame, 16) -ne 0) { $lines += '  no frame bounds from DWM'; $failed = $true; continue }
+    $b = $w.borderDelta
+    $want = @(($w.x - (Get-Px $b.left)), ($w.y - (Get-Px $b.top)), ($w.x + $w.width + (Get-Px $b.right)), ($w.y + $w.height + (Get-Px $b.bottom)))
+    $got = @($frame.Left, $frame.Top, $frame.Right, $frame.Bottom)
+    $off = (0..3 | ForEach-Object { [Math]::Abs($got[$_] - $want[$_]) } | Measure-Object -Maximum).Maximum
+    $lines += "  frame ($($got -join ',')), GlazeWM's place ($($want -join ',')): off by $off px"
+    if ($off -gt 2) { $failed = $true }
 }
 $lines | Set-Content "$Out\checks.txt"
 $lines | Write-Host
