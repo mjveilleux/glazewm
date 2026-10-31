@@ -38,6 +38,14 @@ try {
     Copy-Item (Join-Path $root 'target\release\glazewm.exe') $stage
     Copy-Item (Join-Path $root 'target\release\glazewm-watcher.exe') $stage
     Copy-Item (Join-Path $root 'target\release\glazewm-cli.exe') "$stage\cli\glazewm.exe"
+    # What this fork can do beyond the official GlazeWM, one name a line, beside glazewm.exe: omawin
+    # reads it (themes/render.ps1) to choose what to write in GlazeWM's config, so it never guesses
+    # from a version number. Add a line with each feature omawin's config may use.
+    @(
+        'emit'                     # `emit <name> [args]`: a `custom` event for IPC subscribers
+        'animations.enabled'       # `animations.enabled: false` keeps the settings, animates nothing
+        'animations.window_close'  # the close command's fade / pop-out
+    ) | Set-Content (Join-Path $stage 'omawin-features.txt') -Encoding ascii
     $zipName = "glazewm-$Version-windows-x64.zip"
     $zip = Join-Path $out $zipName
     Compress-Archive -Path "$stage\*" -DestinationPath $zip
@@ -49,5 +57,5 @@ try {
     if ($NoPublish) { return }
     $commit = git rev-parse HEAD
     gh release create "v$Version" $zip $sums --repo mjveilleux/glazewm --target $commit --title "GlazeWM $Version" `
-        --notes "omawin's GlazeWM ($commit, based on v$Base): starts without the taskbar (the tray icon is added once Explorer's taskbar exists, instead of aborting), so it can start the moment you sign in. Unsigned: omawin signs it on each PC (install/glazewm-fork.ps1). Verify with SHA256SUMS-windows-x64.txt."
+        --notes "omawin's GlazeWM ($commit, based on v$Base): window animations (open, move, close; animations.enabled), the emit command for IPC subscribers, and it starts without the taskbar (the tray icon is added once Explorer's taskbar exists, instead of aborting), so it can start the moment you sign in. omawin-features.txt lists what omawin may use. Unsigned: omawin signs it on each PC (install/glazewm-fork.ps1). Verify with SHA256SUMS-windows-x64.txt."
 } finally { Pop-Location }
