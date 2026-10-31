@@ -1,12 +1,15 @@
 name: omawin release
 
 # Publishes omawin's GlazeWM (scripts/omawin-release.ps1) from a Windows runner, so a release
-# doesn't wait on a Windows PC: push a tag v<base>-omawin.<n> (or run it by hand once this file is
-# on the default branch). omawin's install and tools bundle take the newest release, so each one
-# reaches every new omawin install.
+# doesn't wait on a Windows PC: change scripts/omawin-release-version.txt on omawin's branches,
+# push a tag v<base>-omawin.<n>, or run it by hand once this file is on the default branch.
+# omawin's install and tools bundle take the newest release, so each one reaches every new
+# omawin install.
 on:
   push:
     tags: ['v*-omawin.*']
+    branches: ['omawin', 'claude/**']
+    paths: ['scripts/omawin-release-version.txt']
   workflow_dispatch:
     inputs:
       version:
@@ -36,6 +39,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         # From the tag (v3.10.1-omawin.10 is version 3.10.1-omawin.10) or the input.
+        # From the tag (v3.10.1-omawin.10 is version 3.10.1-omawin.10), the input, or the file.
         run: |
-          $version = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}'.TrimStart('v') } else { '${{ inputs.version }}' }
+          $version = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}'.TrimStart('v') }
+                     elseif ('${{ inputs.version }}') { '${{ inputs.version }}' }
+                     else { (Get-Content scripts/omawin-release-version.txt -Raw).Trim() }
+          if ($version -notmatch '^\d+\.\d+\.\d+-omawin\.\d+$') { throw "not a release version: '$version'" }
+          # Published once: a push that doesn't change the version publishes nothing.
+          gh release view "v$version" --repo '${{ github.repository }}' 2>$null
+          if ($LASTEXITCODE -eq 0) { Write-Host "v$version is already out"; exit 0 }
           ./scripts/omawin-release.ps1 -Version $version
