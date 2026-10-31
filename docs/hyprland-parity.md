@@ -126,14 +126,16 @@ README animation section and sample config with a Hyprland-like preset. Platform
 
 From the `animation-check` workflow's slowed run (600 ms animations) on GitHub's Windows Server 2025 runner, which has no GPU: its compositor manages 25–30 frames a second at best, so no code reaches a 16.7 ms frame there. "Before" is the code this branch started from, with Phase 0's measurements added (`claude/hyprland-parity-baseline`); both are recorded the same way (ffmpeg only).
 
-| | Before | After (Phase 3) |
+| | Before | After (all phases) |
 |---|---|---|
-| compositor frame interval during animations, mean | 32–41 ms | 24–35 ms |
-| compositor frame interval, p95 | 48–62 ms | 47–58 ms |
-| WM ticks during a slide or close | 37–51, at 64 Hz, one 285 ms hitch | 0: the compositor plays them |
+| compositor frame interval during animations, mean | 32–41 ms | 33–49 ms |
+| compositor frame interval, p95 | 48–62 ms | 47–65 ms |
+| WM ticks during a slide or close | 37–51, at 64 Hz, one 285 ms hitch | 0 when nothing else changes: the compositor plays them; else one per compositor frame (border colors, fades) |
 | WM ticks during fades and live moves | 64 Hz timer | one per compositor frame |
-| window capture | 76–231 ms | 93–416 ms (more windows per step: workspace switches) |
-| start, asked for to first frame | 159–430 ms | 34–1012 ms (the long ones are workspace switches capturing four windows on a CPU-only runner) |
+| window capture | 76–231 ms | 65–208 ms |
+| start, asked for to first frame | 159–430 ms | 2–673 ms (median 260; the long ones are workspace switches capturing four windows on a CPU-only runner) |
+
+The after column is the last run (`animation-check` run 41175835713), which also runs every interruption step and passes every check.
 
 What the runner can't show: on a machine with a GPU, the compositor runs at the display's rate and plays snapshot animations with no work from the WM, so their frames are as even as the display's. The p95 target (≈ one refresh period) can only be checked there; CI checks what's the same on any machine.
 
