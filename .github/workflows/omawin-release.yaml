@@ -1,9 +1,12 @@
 name: omawin release
 
 # Publishes omawin's GlazeWM (scripts/omawin-release.ps1) from a Windows runner, so a release
-# doesn't wait on a Windows PC. By hand only: omawin's install and tools bundle take the newest
-# release, so each one reaches every new omawin install.
+# doesn't wait on a Windows PC: push a tag v<base>-omawin.<n> (or run it by hand once this file is
+# on the default branch). omawin's install and tools bundle take the newest release, so each one
+# reaches every new omawin install.
 on:
+  push:
+    tags: ['v*-omawin.*']
   workflow_dispatch:
     inputs:
       version:
@@ -32,4 +35,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/omawin-release.ps1 -Version '${{ inputs.version }}'
+        # From the tag (v3.10.1-omawin.10 is version 3.10.1-omawin.10) or the input.
+        run: |
+          $version = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}'.TrimStart('v') } else { '${{ inputs.version }}' }
+          ./scripts/omawin-release.ps1 -Version $version
