@@ -67,12 +67,14 @@ animations:
     duration_ms: $DurationMs
     easing: 'ease_out_quint'
   windows_in:
-    style: 'fade'
+    style: 'popin'
     duration_ms: $OpenMs
     easing: 'ease_out_cubic'
   windows_out:
-    style: 'popin'
+    style: 'gnomed'
     duration_ms: $CloseMs
+  fade:
+    duration_ms: $OpenMs
   windows_move:
     style: 'slide'
     easing: 'overshoot'
