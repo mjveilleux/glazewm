@@ -184,3 +184,14 @@ What it showed:
 - Each dimmed window costs a full-size layered window in the compositor, doubling the layers on screen.
 
 Dropped, as section 3 planned for this outcome. `window_effects.other_windows.transparency` already gives inactive windows a muted look without any of this.
+
+## 8. Checking smoothness on a real PC
+
+CI's runner has no GPU, so Phase 2's target (p95 frame interval about one refresh period) is checked by hand on a PC with one:
+
+1. Build the branch (`cargo build --release -p wm -p wm-cli`) and start it with `glazewm start --verbose`, so debug logs (and `glazewm::anim`) are printed. To keep only the timing lines, filter for `glazewm::anim`.
+2. Use the animation tree with snapshot styles: `windows_move: { style: slide }`, `windows_in: { style: popin }`, `workspaces: { style: slide }` (the sample config's block, uncommented). Live `move` / `popin` with `live: true` tick per frame and aren't what's measured.
+3. Move windows around, open and close a few, switch workspaces.
+4. Read the `Compositor frames.` lines: one per run of animations, with `mean_ms`, `p95_ms`, `max_ms` and `late` (intervals over 1.5 frames), against `period_ms` (the monitor's refresh period). On a 60 Hz display, p95 should be about 16.7 ms and `late` near 0. `Animation frames.` lines with `frames=0` are runs the compositor played alone; `First animation frame.` gives `start_ms`, from the command to the first frame.
+
+If p95 stays well above the period, the logs and a short screen recording are what's needed to look into it.
