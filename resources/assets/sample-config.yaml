@@ -63,15 +63,21 @@ gaps:
 #            └─ windows_move  (windows moving or resizing)
 #   fade ─┬─ fade_in          (opacity of windows appearing; without `fade`,
 #         └─ fade_out          it follows the window's own animation)
+#   border                    (the focused window's border color changing)
+#   workspaces ─┬─ workspaces_in   (switching workspaces: 'slide',
+#               └─ workspaces_out   'slidevert', 'fade', or 'slidefade' with
+#                                   `slide_percent`)
 #
 # A node animates once it or its parent is set, unless `enabled: false`.
 # Each node takes `duration_ms`, `easing`, `style` and, for `popin`,
 # `popin_percent` (the size it grows from or shrinks to).
 #
 # Styles: 'slide' (a snapshot of the window moves to the new spot), 'fade'
-# (placed while invisible, then fades in), 'popin' (grows in, or shrinks
-# out, while fading), and 'move' (the live window moves each frame;
-# choppier than 'slide'). 'fade', 'popin' and 'move' are Windows only.
+# (placed while invisible, then fades in), 'popin' (a snapshot grows in, or
+# shrinks out, while fading; `live: true` grows the live window instead),
+# 'gnomed' (unfolds from a line, or folds into one), and 'move' (the live
+# window moves each frame; choppier than 'slide'). All but 'slide' are
+# Windows only.
 #
 # Easings: 'linear', 'ease_in', 'ease_out', 'ease_in_out', 'ease_in_cubic',
 # 'ease_out_cubic', 'ease_in_out_cubic', 'ease_out_quint', or a curve of
@@ -100,6 +106,11 @@ animations:
   # fade:
   #   duration_ms: 150
   #   easing: 'ease_out_cubic'
+  # border:
+  #   duration_ms: 300
+  # workspaces:
+  #   style: 'slide'
+  #   duration_ms: 250
 
 window_effects:
   # Visual effects to apply to the focused window.

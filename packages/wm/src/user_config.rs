@@ -399,3 +399,47 @@ impl UserConfig {
     })
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use wm_common::ParsedConfig;
+
+  use super::SAMPLE_CONFIG;
+
+  /// Parses and resolves a config, as reading the user's does.
+  fn resolve(yaml: &str) -> ParsedConfig {
+    let mut config: ParsedConfig =
+      serde_yaml::from_str(yaml).expect("config should parse");
+    config
+      .animations
+      .resolve()
+      .expect("animations should resolve");
+    config
+  }
+
+  #[test]
+  fn sample_config_loads() {
+    resolve(SAMPLE_CONFIG);
+  }
+
+  #[test]
+  fn sample_animations_uncommented_load() {
+    // The sample's animation block, uncommented: from `animations:` to
+    // the next blank line.
+    let block = SAMPLE_CONFIG
+      .lines()
+      .skip_while(|line| !line.starts_with("animations:"))
+      .take_while(|line| !line.trim().is_empty())
+      .map(|line| line.replacen("# ", "", 1))
+      .collect::<Vec<_>>()
+      .join("\n");
+
+    let config = resolve(&block);
+    let resolved = config.animations.resolved();
+
+    assert!(resolved.windows_in.is_some());
+    assert!(resolved.windows_move.is_some());
+    assert!(resolved.border.is_some());
+    assert!(resolved.workspaces_in.is_some());
+  }
+}

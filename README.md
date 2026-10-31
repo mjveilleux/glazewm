@@ -303,6 +303,57 @@ window_effects:
       color: "#d3d3d3"
 ```
 
+### Config: Animations
+
+Windows can animate as they move, open and close, and workspaces as they switch, configured as a tree like Hyprland's: each node takes whatever it leaves out from its parent.
+
+```
+windows ─┬─ windows_in    (new windows)       fade ─┬─ fade_in     border
+         ├─ windows_out   (closed windows)          └─ fade_out
+         └─ windows_move  (moves and resizes)
+workspaces ─┬─ workspaces_in
+            └─ workspaces_out
+```
+
+A node animates once it (or its parent) is set, unless it says `enabled: false`. Each takes `duration_ms`, `easing` and `style`:
+
+- **Windows:** `slide` (a snapshot moves to the new spot; the default for moves), `popin` (grows in from `popin_percent` while fading, or shrinks out; add `live: true` to grow the live window instead of a snapshot), `gnomed` (unfolds from, or folds into, a line), `fade`, and `move` (the live window moves each frame: choppier, but its content stays live).
+- **Workspaces:** `slide`, `slidevert`, `fade` and `slidefade` (slides `slide_percent` of the monitor while fading).
+- **Easings:** `linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_out_cubic`, `ease_out_quint`, or a curve of your own under `beziers` (`[x1, y1, x2, y2]` as in CSS `cubic-bezier`; y may leave 0–1 to overshoot).
+- **`border`** animates the focused window's border color between the `window_effects` colors.
+
+Snapshot animations are played by the compositor itself (DirectComposition), so each frame lands on time without the WM's help. Animations follow Windows' own "Animation effects" setting. The old `window_open`, `window_close` and `window_move` keys (with `effect_type`) still work.
+
+> Note: Animations are exclusive to Windows; macOS has slides only.
+
+```yaml
+animations:
+  enabled: true
+  beziers:
+    snappy: [0.05, 0.9, 0.1, 1.05]
+  windows:
+    duration_ms: 200
+    easing: "snappy"
+  windows_in:
+    style: "popin"
+    popin_percent: 87
+  windows_out:
+    style: "popin"
+    popin_percent: 95
+    duration_ms: 160
+  windows_move:
+    style: "slide"
+    trigger_threshold: "10px"
+  fade:
+    duration_ms: 150
+    easing: "ease_out_cubic"
+  border:
+    duration_ms: 300
+  workspaces:
+    style: "slide"
+    duration_ms: 250
+```
+
 ### Config: Window behavior
 
 The `window_behavior` config option exists to customize the states that a window can be in (`tiling`, `floating`, `minimized`, and `fullscreen`).
