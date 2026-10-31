@@ -31,8 +31,10 @@ general:
 workspaces:
   - name: '1'
   - name: '2'
+# New windows animate in, so GlazeWM hides them as they're created: the apps below must still
+# open and draw normally under it.
 animations:
-  enabled: false
+  windows_in: { style: 'popin', duration_ms: 150 }
 "@ | Set-Content $config -Encoding utf8
 
 # Borderless capture, as in the animation check.
@@ -73,7 +75,23 @@ Start-Sleep -Seconds 8
 # The windows GlazeWM manages on workspace 1, by process.
 $windows = @((& $cli query windows | ConvertFrom-Json).data.windows |
         Where-Object { $_.processName -in 'notepad', 'msedge', 'WindowsTerminal' })
-foreach ($w in $windows) { Write-Report "window $($w.handle): $($w.processName) '$($w.title)'" }
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class Alpha {
+  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
+  [DllImport("user32.dll")] public static extern bool GetLayeredWindowAttributes(IntPtr h, out uint key, out byte alpha, out uint flags);
+  public static string Of(long handle) {
+    IntPtr h = new IntPtr(handle);
+    bool layered = (GetWindowLong(h, -20) & 0x80000) != 0;
+    uint key, flags; byte alpha = 255;
+    if (layered && !GetLayeredWindowAttributes(h, out key, out alpha, out flags)) return "layered, unreadable";
+    return (layered ? "layered" : "not layered") + ", alpha " + alpha;
+  }
+}
+'@
+# Opened under GlazeWM, which hid them as they were created: each must have its opacity back.
+foreach ($w in $windows) { Write-Report "window $($w.handle): $($w.processName) '$($w.title)': $([Alpha]::Of([long]$w.handle))" }
 $handles = @($windows | ForEach-Object { [string]$_.handle })
 if (-not $handles.Count) { throw 'No windows to capture.' }
 

@@ -20,11 +20,11 @@ use windows::{
         DispatchMessageW, EnumWindows, GetLayeredWindowAttributes,
         GetMessageW, GetPropW, GetWindowLongPtrW, IsWindowVisible,
         RemovePropW, SetLayeredWindowAttributes, SetPropW,
-        SetWindowLongPtrW, TranslateMessage, EVENT_OBJECT_SHOW,
-        GWL_EXSTYLE, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG,
-        OBJID_WINDOW, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
-        WS_CAPTION, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW,
+        SetWindowLongPtrW, TranslateMessage, EVENT_OBJECT_CREATE,
+        EVENT_OBJECT_DESTROY, EVENT_OBJECT_SHOW, GWL_EXSTYLE,
+        LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG, OBJID_WINDOW,
+        WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WS_CAPTION,
+        WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
       },
     },
   },
@@ -71,8 +71,9 @@ pub(crate) fn set_enabled(enabled: bool) {
   }
 }
 
-/// Starts, once, a thread whose only job is hiding new windows the moment
-/// they're shown.
+/// Starts, once, a thread whose only job is hiding new windows: when
+/// they're created, before they're ever shown, and (any it missed) the
+/// moment they're shown.
 ///
 /// The WM's own event hook runs on its busy main thread, which also
 /// captures and draws animations: there a new window could stay on screen
@@ -90,7 +91,7 @@ fn watch_shows() {
         // thread, which pumps its messages below.
         let hook = unsafe {
           SetWinEventHook(
-            EVENT_OBJECT_SHOW,
+            EVENT_OBJECT_CREATE,
             EVENT_OBJECT_SHOW,
             None,
             Some(on_show),
@@ -125,18 +126,25 @@ fn watch_shows() {
   });
 }
 
-/// Callback of the hook set by `watch_shows`.
+/// Callback of the hook set by `watch_shows`: windows are hidden when
+/// created and when shown, and forgotten when destroyed.
 extern "system" fn on_show(
   _hook: HWINEVENTHOOK,
-  _event_type: u32,
+  event_type: u32,
   handle: HWND,
   id_object: i32,
   id_child: i32,
   _event_thread: u32,
   _event_time: u32,
 ) {
-  if id_object == OBJID_WINDOW.0 && id_child == 0 && handle != HWND(0) {
-    hide_if_app_window(handle.0);
+  if id_object != OBJID_WINDOW.0 || id_child != 0 || handle == HWND(0) {
+    return;
+  }
+
+  match event_type {
+    EVENT_OBJECT_CREATE => hide_if_new_app_window(handle.0),
+    EVENT_OBJECT_DESTROY => forget(handle.0),
+    _ => hide_if_app_window(handle.0),
   }
 }
 
@@ -186,6 +194,7 @@ pub(crate) fn hide_if_app_window(handle: isize) {
 
   // The same checks as the WM's own for whether to manage a window, as far
   // as they can be made this early.
+  // SAFETY: Only reads whether the window is visible.
   let is_app_window = unsafe { IsWindowVisible(HWND(handle)) }.as_bool()
     && !window.has_window_style(WS_CHILD)
     && !window.has_window_style_ex(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
@@ -193,8 +202,72 @@ pub(crate) fn hide_if_app_window(handle: isize) {
     && window.is_cloaked().is_ok_and(|cloaked| !cloaked);
 
   if !is_app_window {
+    // Hidden when it was created, but not a window the WM will take over
+    // after all (e.g. it became a child of another): shown as it was.
+    let state = HIDDEN
+      .lock()
+      .ok()
+      .and_then(|mut hidden| hidden.remove(&handle));
+
+    if let Some(state) = state {
+      unmark(handle);
+      restore(handle, state);
+    }
+
     return;
   }
+
+  hide(&window);
+}
+
+/// Hides a window the moment it's created, before it's ever shown, if it
+/// looks like an app window the WM will manage once shown: top-level,
+/// with a title bar, and not owned by another window.
+///
+/// Hiding on show alone leaves the window on screen for the frame or so
+/// the show event takes to arrive. A window hidden here that turns out
+/// not to be one the WM manages gets its opacity back when shown (see
+/// `hide_if_app_window`).
+fn hide_if_new_app_window(handle: isize) {
+  if !ENABLED.load(Ordering::Relaxed) {
+    return;
+  }
+
+  let Ok(_hiding) = HIDING.lock() else {
+    return;
+  };
+
+  let window = NativeWindow::new(handle);
+
+  // SAFETY: Only reads whether the window is visible.
+  let looks_like_app_window = !unsafe { IsWindowVisible(HWND(handle)) }
+    .as_bool()
+    && !window.has_window_style(WS_CHILD)
+    && window.has_window_style(WS_CAPTION)
+    && !window.has_window_style_ex(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+    && !window.has_owner_window();
+
+  if looks_like_app_window {
+    hide(&window);
+  }
+}
+
+/// Forgets a destroyed window hidden on show or creation.
+fn forget(handle: isize) {
+  if let Ok(mut hidden) = HIDDEN.lock() {
+    hidden.remove(&handle);
+  }
+
+  if let Ok(mut handled) = HANDLED.lock() {
+    handled.remove(&handle);
+  }
+}
+
+/// Makes a window fully transparent, recording how to restore it.
+///
+/// Windows that draw their own transparency are left alone.
+fn hide(window: &NativeWindow) {
+  let handle = window.hwnd().0;
 
   let Ok(mut hidden) = HIDDEN.lock() else {
     return;
@@ -212,6 +285,7 @@ pub(crate) fn hide_if_app_window(handle: isize) {
 
     // Leave alone windows that draw their own transparency (per-pixel
     // alpha or a color key): their opacity can't be put back as it was.
+    // SAFETY: The out pointers point at locals.
     let has_plain_alpha = unsafe {
       GetLayeredWindowAttributes(
         HWND(handle),
