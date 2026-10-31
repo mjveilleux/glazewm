@@ -1,0 +1,41 @@
+name: Dim spike
+
+# Phase 5.2 spike of docs/hyprland-parity.md: can a helper window dim an inactive window from just
+# above it in z-order (scripts/dim-spike.ps1)? Results go to ci/dim-spike--<branch>.
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['scripts/dim-spike.ps1', '.github/workflows/dim-spike.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  spike:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Spike
+        shell: pwsh
+        run: ./scripts/dim-spike.ps1
+
+      - name: Publish to ci/dim-spike--<branch>
+        if: always()
+        shell: bash
+        env:
+          TOKEN: ${{ github.token }}
+          SOURCE: ${{ github.ref_name }}
+        run: |
+          target="ci/dim-spike--${SOURCE//\//-}"
+          mkdir -p out-dim
+          cd out-dim
+          git init -q
+          git checkout -q -b "$target"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -q -m "Dim spike: run ${{ github.run_id }} on ${{ github.sha }}"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}" "$target"
