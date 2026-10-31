@@ -11,6 +11,12 @@
     it, and out\checks.txt is what's on screen once everything settles: each Notepad's frame and
     opacity, and any animation overlay left behind. The script exits 1 if a check fails.
 
+    checks.txt also has a timing table, from GlazeWM's own log (tracing target glazewm::anim):
+    how long each animation took to start and to capture its window, and how evenly its frames
+    came. Timings are reported, never failed on: the runner has no GPU, so they vary run to run.
+    What fails a run is always the same on any machine: an overlay left behind, a window left
+    transparent, or a window that isn't exactly where GlazeWM's layout puts it.
+
     One Notepad is closed with GlazeWM's close command, the close animation's only trigger: its
     snapshot must be up right after the command and gone once the animation has had its time.
     With -Disabled the config says animations.enabled: false, and no overlay may appear at all.
@@ -142,6 +148,13 @@ public static class Win {
   [DllImport("user32.dll")] public static extern bool GetLayeredWindowAttributes(IntPtr hwnd, out uint key, out byte alpha, out uint flags);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+  // DWMWA_EXTENDED_FRAME_BOUNDS (9): the frame as seen, without the invisible resize borders.
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out RECT rect, int size);
+  public static RECT Visible(IntPtr hwnd) {
+    RECT rect;
+    if (DwmGetWindowAttribute(hwnd, 9, out rect, Marshal.SizeOf(typeof(RECT))) != 0) GetWindowRect(hwnd, out rect);
+    return rect;
+  }
   public static List<IntPtr> All() {
     var list = new List<IntPtr>();
     EnumWindows((h, l) => { list.Add(h); return true; }, IntPtr.Zero);
@@ -210,6 +223,9 @@ $overlays = Get-Overlays
 $lines += "animation overlays left: $(@($overlays).Count)"
 if (@($overlays).Count) { $failed = $true }
 $alive = $notepads | Where-Object { -not $_.HasExited } | ForEach-Object { $_.Id }
+# Where GlazeWM's layout puts each window, by handle.
+$layout = @{}
+foreach ($w in (& $cli query windows | ConvertFrom-Json).data.windows) { $layout[[long]$w.handle] = $w }
 foreach ($hwnd in [Win]::All()) {
     $procId = 0
     [void][Win]::GetWindowThreadProcessId($hwnd, [ref]$procId)
@@ -221,6 +237,41 @@ foreach ($hwnd in [Win]::All()) {
     if ($layered) { $key = 0; $a = [byte]0; $flags = 0; if ([Win]::GetLayeredWindowAttributes($hwnd, [ref]$key, [ref]$a, [ref]$flags)) { $alpha = $a } }
     if ($alpha -ne 255) { $failed = $true }
     $lines += "notepad pid $procId at ($($rect.Left),$($rect.Top))-($($rect.Right),$($rect.Bottom)) layered=$layered alpha=$alpha"
+    # The visible frame must be the layout's rect once animations are over.
+    $want = $layout[[long]$hwnd]
+    $seen = [Win]::Visible($hwnd)
+    if (-not $want) {
+        $lines += "  not in GlazeWM's layout"
+        $failed = $true
+    } else {
+        $exact = $seen.Left -eq $want.x -and $seen.Top -eq $want.y -and
+            ($seen.Right - $seen.Left) -eq $want.width -and ($seen.Bottom - $seen.Top) -eq $want.height
+        $lines += "  visible ($($seen.Left),$($seen.Top)) $($seen.Right - $seen.Left)x$($seen.Bottom - $seen.Top), layout ($($want.x),$($want.y)) $($want.width)x$($want.height): $(if ($exact) { 'exact' } else { 'OFF' })"
+        if (-not $exact) { $failed = $true }
+    }
+}
+
+# Timing, from GlazeWM's log: reported, not checked (see the description at the top).
+function Get-Field($line, $name) { if ($line -match "\b$name=([0-9.]+|None|Some\(([0-9]+)\))") { if ($matches[2]) { $matches[2] } else { $matches[1] } } }
+function Get-Spread($values) {
+    $sorted = @($values | ForEach-Object { [double]$_ } | Sort-Object)
+    if (-not $sorted.Count) { return 'none' }
+    $median = $sorted[[int][Math]::Floor(($sorted.Count - 1) / 2)]
+    "min $($sorted[0]), median $median, max $($sorted[-1]) (n=$($sorted.Count))"
+}
+$anim = @()
+if (Test-Path "$Out\glazewm.log") {
+    # Without the log's colors, so fields read as name=value.
+    $anim = @(Get-Content "$Out\glazewm.log" | ForEach-Object { $_ -replace "`e\[[0-9;]*m", '' } | Where-Object { $_ -match 'glazewm::anim' })
+}
+$lines += ''
+$lines += 'timing (ms; reported, not checked)'
+$lines += "  start (asked for to first frame): $(Get-Spread ($anim | Where-Object { $_ -match 'First animation frame' } | ForEach-Object { Get-Field $_ 'start_ms' }))"
+$lines += "  window capture: $(Get-Spread ($anim | Where-Object { $_ -match 'Window captured' } | ForEach-Object { Get-Field $_ 'capture_ms' }))"
+$lines += '  runs: frames | interval mean / p95 / max | late (>1.5 periods) | period | duration | dwm composed / expected, dropped'
+foreach ($run in $anim | Where-Object { $_ -match 'Animation frames' }) {
+    $f = { param($n) Get-Field $run $n }
+    $lines += "    $(& $f frames) | $(& $f mean_ms) / $(& $f p95_ms) / $(& $f max_ms) | $(& $f late) | $(& $f period_ms) | $(& $f duration_ms) | $(& $f dwm_composed) / $(& $f dwm_expected), $(& $f dwm_dropped)"
 }
 $lines | Set-Content "$Out\checks.txt"
 $lines | Write-Host
