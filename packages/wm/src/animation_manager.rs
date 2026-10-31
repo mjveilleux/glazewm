@@ -1097,6 +1097,14 @@ impl AnimationManager {
   /// Returns `false` when it couldn't be made; the animation is then
   /// skipped, and the next one tries again.
   fn ensure_context(&mut self, dispatcher: &Dispatcher) -> bool {
+    // A lost GPU device (e.g. a driver update) can't draw anymore. Running
+    // animations still end on time and give their windows back; new ones
+    // get a new context, or don't animate.
+    if self.context.as_ref().is_some_and(AnimationContext::is_lost) {
+      tracing::warn!("GPU device lost; recreating the animation context.");
+      self.context = None;
+    }
+
     if self.context.is_none() {
       match AnimationContext::new(dispatcher) {
         Ok(context) => self.context = Some(context),

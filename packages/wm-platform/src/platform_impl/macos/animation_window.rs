@@ -27,6 +27,13 @@ impl AnimationContext {
     Ok(Self)
   }
 
+  /// Implements [`AnimationContext::is_lost`].
+  // LINT: Matches the Windows implementation's signature.
+  #[allow(clippy::unused_self)]
+  pub(crate) fn is_lost(&self) -> bool {
+    false
+  }
+
   /// Implements [`AnimationContext::transaction`].
   #[allow(clippy::unused_self)]
   pub(crate) fn transaction<F, R>(

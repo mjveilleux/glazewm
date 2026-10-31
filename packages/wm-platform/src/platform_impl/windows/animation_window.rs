@@ -66,7 +66,7 @@ unsafe impl Send for GraphicsCaptureItemInterop {}
 
 /// Platform-specific implementation of [`AnimationContext`].
 pub(crate) struct AnimationContext {
-  _d3d_device: ID3D11Device,
+  d3d_device: ID3D11Device,
   d3d_context: ThreadBound<ID3D11DeviceContext>,
   dcomp_device: ThreadBound<IDCompositionDesktopDevice>,
   winrt_device: Direct3DDevice,
@@ -102,7 +102,7 @@ impl AnimationContext {
         >()?;
 
         Ok(Self {
-          _d3d_device: d3d_device,
+          d3d_device,
           d3d_context: ThreadBound::new(d3d_context, dispatcher.clone()),
           dcomp_device: ThreadBound::new(dcomp_device, dispatcher.clone()),
           winrt_device: Direct3DDevice(winrt_device),
@@ -133,6 +133,12 @@ impl AnimationContext {
         Ok(result)
       })
     })?
+  }
+
+  /// Implements [`AnimationContext::is_lost`].
+  pub(crate) fn is_lost(&self) -> bool {
+    // SAFETY: Only asks the device whether it has been removed.
+    unsafe { self.d3d_device.GetDeviceRemovedReason() }.is_err()
   }
 
   /// Implements [`AnimationContext::next_frame_time`].

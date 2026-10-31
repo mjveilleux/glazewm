@@ -22,6 +22,18 @@ impl AnimationContext {
     Ok(Self { inner })
   }
 
+  /// Whether the GPU device behind the context is gone (e.g. the driver
+  /// was updated or reset): nothing drawn with it shows anymore, and a new
+  /// context is needed.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Always `false`.
+  #[must_use]
+  pub fn is_lost(&self) -> bool {
+    self.inner.is_lost()
+  }
+
   /// Executes `update_fn` inside a compositor transaction.
   ///
   /// Used with [`AnimationWindow::update`] to commit all updates together
