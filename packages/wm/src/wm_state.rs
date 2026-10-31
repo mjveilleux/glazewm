@@ -37,15 +37,6 @@ pub struct WmState {
 
   pub pending_sync: PendingSync,
 
-  /// When a sync held back for a new window is due (see
-  /// `WindowManager::process_event`). Changes collect in `pending_sync`
-  /// until then.
-  pub settle_deadline: Option<Instant>,
-
-  /// Gets a message once every window a settle waits for has drawn, to
-  /// end the settle early.
-  pub settle_drawn: Option<tokio::sync::oneshot::Receiver<()>>,
-
   /// Manager for window animations.
   pub animation_manager: AnimationManager,
 
@@ -101,8 +92,6 @@ impl WmState {
       animation_manager: AnimationManager::new(&dispatcher),
       dispatcher,
       pending_sync: PendingSync::default(),
-      settle_deadline: None,
-      settle_drawn: None,
       prev_effects_window: None,
       recent_workspace_name: None,
       unmanaged_or_minimized_timestamp: None,
@@ -705,10 +694,6 @@ impl WmState {
 
 impl Drop for WmState {
   fn drop(&mut self) {
-    // Windows hidden the moment they were shown, not yet managed.
-    #[cfg(target_os = "windows")]
-    wm_platform::restore_windows_hidden_on_show();
-
     let managed_windows = self.windows();
 
     for window in &managed_windows {

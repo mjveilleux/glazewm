@@ -111,9 +111,8 @@ pub struct AnimationNode {
   /// monitor (the rest is a fade).
   pub slide_percent: Option<f32>,
 
-  /// For `windows_in` with `popin`: grow the live window itself each
-  /// frame, rather than a snapshot of it. Choppier, but shows the app
-  /// drawing as it opens.
+  /// For `windows_in` with `popin`: move the live window itself each
+  /// frame into its place, like `move`, rather than a snapshot of it.
   pub live: Option<bool>,
 }
 
@@ -236,7 +235,8 @@ impl AnimationsConfig {
       "windows_in",
       Some("windows"),
       Some("fade_in"),
-      AnimationEffect::Popin,
+      // New windows glide in from where they appear.
+      AnimationEffect::Slide,
       DEFAULT_POPIN_IN_PERCENT,
     )?;
 
@@ -832,7 +832,7 @@ mod tests {
     let open = config.open_effect().expect("windows_in");
     assert_eq!(open.timing.duration_ms, 120);
     assert_eq!(open.timing.easing, Easing::Preset(EasingPreset::Linear));
-    assert_eq!(open.style, AnimationEffect::Popin);
+    assert_eq!(open.style, AnimationEffect::Slide);
 
     let close = config.close_effect().expect("windows_out");
     assert_eq!(close.timing.duration_ms, 300);

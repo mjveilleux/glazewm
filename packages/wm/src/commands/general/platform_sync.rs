@@ -15,8 +15,8 @@ use wm_platform::{OpacityValue, Rect, WindowZOrder};
 
 use crate::{
   animation_manager::{
-    entrance_scale, AnimationManager, AnimationPlan, AnimationTrigger,
-    LiveRequest, SlideRequest,
+    AnimationManager, AnimationPlan, AnimationTrigger, LiveRequest,
+    SlideRequest,
   },
   models::{Container, WindowContainer},
   traits::{CommonGetters, PositionGetters, WindowGetters},
@@ -28,12 +28,7 @@ pub fn platform_sync(
   state: &mut WmState,
   config: &UserConfig,
 ) -> anyhow::Result<()> {
-  // Any sync takes along the changes a settle was holding back.
-  state.settle_deadline = None;
-  state.settle_drawn = None;
-
-  // Animations this sync starts were asked for now, or when a settle
-  // began holding the sync back.
+  // Animations this sync starts were asked for now.
   state.animation_manager.mark_request();
   let result = sync(state, config);
   state.animation_manager.clear_request();
@@ -417,35 +412,15 @@ fn redraw_containers(
       .start_prepared_slides(&state.dispatcher);
   }
 
-  // Windows captured once placed, at an opacity of 0: those arriving with
-  // a switch, and new windows growing in (captured at their own size, not
-  // the one their app opened them at).
-  let mut placed_first = switch.as_ref().map_or_else(Vec::new, |switch| {
+  // Windows arriving with a switch, captured once placed at an opacity of
+  // 0 (they're cloaked until then).
+  let placed_first = switch.as_ref().map_or_else(Vec::new, |switch| {
     redraws
       .iter()
       .filter(|redraw| redraw.switch_role == Some(SwitchRole::Arriving))
       .filter_map(|redraw| switch.arriving_request(redraw))
       .collect::<Vec<_>>()
   });
-
-  placed_first.extend(redraws.iter().filter_map(|redraw| {
-    match &redraw.animation_plan {
-      Some(AnimationPlan::SnapshotIn(effect)) => Some(SlideRequest {
-        start_rect: Some(redraw.target_rect.clone()),
-        // Fading in (at once, if fades are off).
-        opacity: effect.fade.as_ref().map(|_| (0.0, 1.0)),
-        fade: effect.fade.clone(),
-        scale: Some((entrance_scale(effect), (1.0, 1.0))),
-        ..SlideRequest::new(
-          redraw.window.clone(),
-          effect.clone(),
-          redraw.target_rect.clone(),
-          redraw.frame_rate,
-        )
-      }),
-      _ => None,
-    }
-  }));
 
   let placed_first_ids = placed_first
     .iter()
@@ -590,18 +565,17 @@ fn redraw_containers(
     }
   }
 
-  // With a switch, the windows leaving start with those arriving.
-  if switch.is_some() || !placed_first.is_empty() {
+  // The windows leaving start with those arriving.
+  if switch.is_some() {
     start_placed_first(placed_first, focused_container, state, config);
   }
 
   Ok(())
 }
 
-/// Captures the windows to animate once placed (shown by now, at an
-/// opacity of 0: windows arriving with a workspace switch, new windows
-/// growing in), and starts every prepared slide on the same frame, those
-/// of windows leaving with a switch included.
+/// Captures the windows arriving with a workspace switch (shown by now, at
+/// an opacity of 0), and starts every prepared slide on the same frame,
+/// those of the windows leaving included.
 ///
 /// A window that can't animate gets its opacity back at once, so it's
 /// never left invisible.

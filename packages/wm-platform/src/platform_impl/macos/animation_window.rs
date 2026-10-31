@@ -27,19 +27,6 @@ impl AnimationContext {
     Ok(Self)
   }
 
-  /// Implements [`AnimationContext::wait_until_drawn`].
-  ///
-  /// Windows can't be probed this way on macOS.
-  // LINT: Matches the Windows implementation's signature.
-  #[allow(clippy::unused_self)]
-  pub(crate) fn wait_until_drawn(
-    &self,
-    _windows: &[crate::NativeWindow],
-    _timeout: std::time::Duration,
-  ) -> bool {
-    false
-  }
-
   /// Implements [`AnimationContext::is_lost`].
   // LINT: Matches the Windows implementation's signature.
   #[allow(clippy::unused_self)]

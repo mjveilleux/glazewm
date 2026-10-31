@@ -155,10 +155,6 @@ async fn start_wm(
   // Start listening for platform events after populating initial state.
   let mut window_listener = WindowListener::new(dispatcher)?;
 
-  #[cfg(target_os = "windows")]
-  wm_platform::set_hide_windows_on_show(
-    animation_manager::hides_new_windows(&config),
-  );
   let mut display_listener = DisplayListener::new(dispatcher)?;
   let mut mouse_listener = MouseListener::new(
     if config.value.general.focus_follows_cursor {
@@ -242,20 +238,6 @@ async fn start_wm(
       )), if animation_deadline.is_some() => {
         wm.end_finished_animations(&config)
       },
-      () = tokio::time::sleep_until(tokio::time::Instant::from_std(
-        wm.state.settle_deadline.unwrap_or_else(std::time::Instant::now),
-      )), if wm.state.settle_deadline.is_some() => {
-        wm.end_settle(&config)
-      },
-      drawn = settle_drawn(&mut wm.state.settle_drawn) => {
-        wm.state.settle_drawn = None;
-
-        if drawn {
-          wm.end_settle(&config)
-        } else {
-          Ok(())
-        }
-      },
       Some((
         message,
         response_tx,
@@ -331,18 +313,6 @@ async fn start_wm(
   wm.cleanup(&mut config, &mut ipc_server);
 
   Ok(())
-}
-
-/// Waits for the new windows of a settle to have drawn.
-///
-/// Returns whether they did; never returns without a settle to wait for.
-async fn settle_drawn(
-  drawn: &mut Option<tokio::sync::oneshot::Receiver<()>>,
-) -> bool {
-  match drawn {
-    Some(drawn) => drawn.await.is_ok(),
-    None => std::future::pending().await,
-  }
 }
 
 /// Initialize logging with the specified verbosity level.

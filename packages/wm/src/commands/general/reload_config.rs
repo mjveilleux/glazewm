@@ -38,11 +38,6 @@ pub fn reload_config(
   update_container_gaps(state, config);
 
   #[cfg(target_os = "windows")]
-  wm_platform::set_hide_windows_on_show(
-    crate::animation_manager::hides_new_windows(config),
-  );
-
-  #[cfg(target_os = "windows")]
   update_window_effects(&old_config, state, config)?;
 
   // Ensure all windows are shown when hide method is changed.

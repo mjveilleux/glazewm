@@ -27,25 +27,6 @@ use crate::{
   user_config::UserConfig,
 };
 
-/// Whether new windows should be hidden the moment they're shown, so they
-/// never appear where their app put them before fading in at their place.
-///
-/// Only with cloaking as the hide method: with the other methods, the WM
-/// itself shows windows it manages, which would hide them too.
-#[cfg(target_os = "windows")]
-pub fn hides_new_windows(config: &UserConfig) -> bool {
-  config.value.general.hide_method == wm_common::HideMethod::Cloak
-    && wm_platform::system_animations_enabled()
-    && config.value.animations.open_effect().is_some_and(|open| {
-      matches!(
-        open.style,
-        AnimationEffect::Fade
-          | AnimationEffect::Popin
-          | AnimationEffect::Gnomed
-      )
-    })
-}
-
 /// Keeps a rect at least one pixel wide and tall: an overshooting curve
 /// could otherwise shrink a window past nothing and flip it.
 fn at_least_one_pixel(rect: &Rect) -> Rect {
@@ -82,20 +63,16 @@ pub enum AnimationPlan {
   /// The real window itself moves to the new position a little each
   /// frame. With `popin`, it grows there from smaller while fading in.
   Live { effect: ResolvedEffect, popin: bool },
-
-  /// A snapshot of a new window grows (`popin`) or unfolds (`gnomed`) in
-  /// at its place while fading in, while the real window waits
-  /// invisible beneath it.
-  SnapshotIn(ResolvedEffect),
 }
 
 /// Scale of a snapshot, across and down, from and to.
 pub type ScaleChange = ((f32, f32), (f32, f32));
 
-/// Scale a snapshot appearing with `effect` starts at (or one leaving
-/// ends at): smaller for `popin`, a line across its middle for `gnomed`,
-/// its own size otherwise.
-pub fn entrance_scale(effect: &ResolvedEffect) -> (f32, f32) {
+/// Scale a leaving window's snapshot ends at with `effect`: smaller for
+/// `popin`, a line across its middle for `gnomed`, its own size otherwise.
+// LINT: Close animations are only started on Windows.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn exit_scale(effect: &ResolvedEffect) -> (f32, f32) {
   match effect.style {
     AnimationEffect::Popin => (effect.popin_scale, effect.popin_scale),
     AnimationEffect::Gnomed => (1.0, GNOMED_SCALE),
@@ -862,8 +839,8 @@ impl AnimationManager {
       return None;
     }
 
-    // Finished ones aren't counted: a slide left at its end (while a
-    // settle holds syncs back) would otherwise wake the WM nonstop.
+    // Finished ones aren't counted: one not yet ended would otherwise wake
+    // the WM nonstop.
     self
       .slides
       .values()
@@ -998,6 +975,26 @@ impl AnimationManager {
       }
     };
 
+    // A new window is already on screen, where its app put it: it glides
+    // from there to its place, so nothing appears in one spot and then
+    // jumps. Its snapshot glides, or with `move` (or a live `popin`), the
+    // window itself. Styles that would start it smaller or transparent
+    // (`popin`, `gnomed`, `fade`) can't start from what's on screen
+    // without a jump, so they glide too.
+    if matches!(trigger, AnimationTrigger::WindowOpened) {
+      let live = effect.style == AnimationEffect::Move
+        || (effect.style == AnimationEffect::Popin && effect.live);
+
+      return match (live, cfg!(target_os = "windows")) {
+        (true, true) => Some(AnimationPlan::Live {
+          effect: effect.clone(),
+          popin: false,
+        }),
+        (true, false) => None,
+        (false, _) => Some(AnimationPlan::Slide(effect.clone())),
+      };
+    }
+
     match effect.style {
       AnimationEffect::Slide => Some(AnimationPlan::Slide(effect.clone())),
       // Fades change the real window's opacity, which is only possible on
@@ -1013,15 +1010,6 @@ impl AnimationManager {
       // Live animations move the real window, which is only done on
       // Windows. A window already moving keeps moving to its new target,
       // and one mid-slide finishes its slide.
-      // A new window's snapshot grows or unfolds in, unless the live
-      // window should grow.
-      AnimationEffect::Popin | AnimationEffect::Gnomed
-        if cfg!(target_os = "windows")
-          && matches!(trigger, AnimationTrigger::WindowOpened)
-          && !effect.live =>
-      {
-        Some(AnimationPlan::SnapshotIn(effect.clone()))
-      }
       AnimationEffect::Move | AnimationEffect::Popin
         if cfg!(target_os = "windows") =>
       {
@@ -1090,42 +1078,6 @@ impl AnimationManager {
 
     self.stats.animation_started(request.frame_rate);
     self.update_ticking();
-  }
-
-  /// Watches new windows until each has drawn a frame, on a thread of its
-  /// own, for a settle to end as soon as they have (see
-  /// `WindowManager::should_settle`).
-  ///
-  /// Returns a receiver that gets a message once every window has drawn
-  /// within `timeout`; it's dropped unsent otherwise. `None` if there's
-  /// nothing to watch with.
-  pub fn watch_drawn(
-    &mut self,
-    windows: Vec<NativeWindow>,
-    timeout: Duration,
-    dispatcher: &Dispatcher,
-  ) -> Option<tokio::sync::oneshot::Receiver<()>> {
-    if windows.is_empty() || !self.ensure_context(dispatcher) {
-      return None;
-    }
-
-    let context = self.context.clone()?;
-    let (drawn_tx, drawn_rx) = tokio::sync::oneshot::channel();
-
-    let spawned = std::thread::Builder::new()
-      .name("animation-draw-probe".to_string())
-      .spawn(move || {
-        if context.wait_until_drawn(&windows, timeout) {
-          let _ = drawn_tx.send(());
-        }
-      });
-
-    if let Err(err) = spawned {
-      tracing::debug!("Failed to start the draw probe: {err}");
-      return None;
-    }
-
-    Some(drawn_rx)
   }
 
   /// Creates the shared GPU context on first use.
@@ -1299,7 +1251,7 @@ impl AnimationManager {
       clock: AnimationClock::new(&effect.timing, frame_rate),
       fade_clock: AnimationClock::for_fade(effect, frame_rate),
       rect,
-      end_scale: entrance_scale(effect),
+      end_scale: exit_scale(effect),
     };
 
     state.clock.start_time = start_at;

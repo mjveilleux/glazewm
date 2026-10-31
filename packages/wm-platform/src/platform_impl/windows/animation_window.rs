@@ -141,32 +141,6 @@ impl AnimationContext {
     unsafe { self.d3d_device.GetDeviceRemovedReason() }.is_err()
   }
 
-  /// Implements [`AnimationContext::wait_until_drawn`].
-  pub(crate) fn wait_until_drawn(
-    &self,
-    windows: &[NativeWindow],
-    timeout: std::time::Duration,
-  ) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-
-    COM_INIT.with(|_| {
-      // Started together, so the waits overlap.
-      let pending = windows
-        .iter()
-        .map(|window| PendingCapture::start(window.inner.hwnd().0, self))
-        .collect::<Vec<_>>();
-
-      pending.into_iter().all(|pending| {
-        let remaining =
-          deadline.saturating_duration_since(std::time::Instant::now());
-
-        pending
-          .and_then(|pending| pending.wait_for(remaining))
-          .is_ok()
-      })
-    })
-  }
-
   /// Implements [`AnimationContext::next_frame_time`].
   pub(crate) fn next_frame_time(
     &self,

@@ -325,17 +325,6 @@ pub trait NativeWindowWindowsExt {
     opacity_value: &OpacityValue,
   ) -> crate::Result<()>;
 
-  /// Takes over a window that was hidden as soon as it was shown (see
-  /// [`crate::set_hide_windows_on_show`]).
-  ///
-  /// Returns how to restore it, or `None` if it wasn't hidden. The caller
-  /// is then responsible for making the window visible again.
-  ///
-  /// # Platform-specific
-  ///
-  /// This method is only available on Windows.
-  fn take_hidden_on_show(&self) -> Option<crate::HiddenOnShow>;
-
   /// Adjusts the window's transparency by a relative delta.
   ///
   /// # Platform-specific
@@ -446,10 +435,6 @@ impl NativeWindowWindowsExt for NativeWindow {
     opacity_value: &OpacityValue,
   ) -> crate::Result<()> {
     self.inner.set_transparency(opacity_value)
-  }
-
-  fn take_hidden_on_show(&self) -> Option<crate::HiddenOnShow> {
-    platform_impl::hide_on_show::take(self.inner.hwnd().0)
   }
 
   fn adjust_transparency(

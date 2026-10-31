@@ -1,5 +1,3 @@
-use std::time::{Duration, Instant};
-
 use anyhow::{bail, Context};
 use tokio::sync::mpsc::{self};
 use tracing::warn;
@@ -50,11 +48,6 @@ use crate::{
   user_config::UserConfig,
   wm_state::WmState,
 };
-
-/// How long a new window must stay before the others make room for it,
-/// at most (see `WindowManager::should_settle`): the settle ends early
-/// once it has drawn.
-const SETTLE_DELAY: Duration = Duration::from_millis(100);
 
 pub struct WindowManager {
   pub event_rx: mpsc::UnboundedReceiver<WmEvent>,
@@ -151,90 +144,7 @@ impl WindowManager {
     }?;
 
     if !state.is_paused && state.pending_sync.has_changes() {
-      if state.settle_deadline.is_some() {
-        // Synced with the rest when the settle ends.
-      } else if Self::should_settle(state, config) {
-        // The settle counts towards how long its animations take to start.
-        state.animation_manager.mark_request();
-        state.settle_deadline = Some(Instant::now() + SETTLE_DELAY);
-
-        // It ends early once the new windows have drawn.
-        let new_windows = state
-          .pending_sync
-          .open_animation_windows()
-          .iter()
-          .map(|window| window.native().clone())
-          .collect::<Vec<_>>();
-
-        state.settle_drawn = state.animation_manager.watch_drawn(
-          new_windows,
-          SETTLE_DELAY,
-          &state.dispatcher,
-        );
-      } else {
-        platform_sync(state, config)?;
-      }
-    }
-
-    Ok(())
-  }
-
-  /// Whether to hold back a sync until the layout settles.
-  ///
-  /// A new window makes the others slide aside. Apps often show a window
-  /// for a split second (a splash screen, the console of a launcher), and
-  /// their slide aside and back is motion for nothing. Held back briefly,
-  /// a window that's already gone again moves nothing.
-  ///
-  /// Only while new windows stay hidden until placed, or they'd show
-  /// where their app put them for longer.
-  // LINT: `state` and `config` are only used on Windows.
-  #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-  fn should_settle(state: &WmState, config: &UserConfig) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-      // Only for slides: they start late anyway, and live moves are cheap
-      // to turn around.
-      !state.pending_sync.open_animation_windows().is_empty()
-        && config.value.animations.move_effect().is_some_and(|m| {
-          m.effect.style == wm_common::AnimationEffect::Slide
-        })
-        && crate::animation_manager::hides_new_windows(config)
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    false
-  }
-
-  /// Runs the sync a settle held back, once it's due.
-  pub fn end_settle(&mut self, config: &UserConfig) -> anyhow::Result<()> {
-    self.state.settle_deadline = None;
-    self.state.settle_drawn = None;
-
-    // Animations that finished meanwhile were left at their end, so they
-    // end now, with the same sync.
-    let completed_ids = {
-      let manager = &mut self.state.animation_manager;
-      let mut ids = manager.completed_slide_ids();
-      ids.extend(manager.take_completed_fade_ids());
-
-      for id in &ids {
-        manager.cancel_animation(id);
-      }
-
-      ids
-    };
-
-    let windows = self
-      .state
-      .windows()
-      .into_iter()
-      .filter(|window| completed_ids.contains(&window.id()));
-
-    self.state.pending_sync.queue_containers_to_redraw(windows);
-
-    if !self.state.is_paused && self.state.pending_sync.has_changes() {
-      platform_sync(&mut self.state, config)?;
+      platform_sync(state, config)?;
     }
 
     Ok(())
@@ -264,13 +174,6 @@ impl WindowManager {
     config: &UserConfig,
   ) -> anyhow::Result<()> {
     self.state.animation_manager.end_completed_closes();
-
-    // A sync now would take the held back changes along, without their
-    // animations. Finished animations stay at their end until the settle
-    // is over.
-    if self.state.settle_deadline.is_some() {
-      return Ok(());
-    }
 
     let completed_ids = {
       let manager = &mut self.state.animation_manager;
