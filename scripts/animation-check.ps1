@@ -70,7 +70,7 @@ animations:
     duration_ms: $DurationMs
     easing: 'ease_out_quint'
   windows_in:
-    style: 'popin'
+    style: 'slide'
     duration_ms: $OpenMs
     easing: 'ease_out_cubic'
   windows_out:

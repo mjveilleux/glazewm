@@ -58,7 +58,8 @@ gaps:
 # Window animations, set up like Hyprland's: a tree of nodes where a child
 # takes whatever it leaves out from its parent.
 #
-#   windows ─┬─ windows_in    (new windows appearing)
+#   windows ─┬─ windows_in    (new windows: they glide into place from
+#            │                 wherever their app opened them)
 #            ├─ windows_out   (windows closed with the `close` command)
 #            └─ windows_move  (windows moving or resizing)
 #   fade ─┬─ fade_in          (opacity of windows appearing; without `fade`,
@@ -70,14 +71,14 @@ gaps:
 #
 # A node animates once it or its parent is set, unless `enabled: false`.
 # Each node takes `duration_ms`, `easing`, `style` and, for `popin`,
-# `popin_percent` (the size it grows from or shrinks to).
+# `popin_percent` (the size a closing window shrinks to).
 #
 # Styles: 'slide' (a snapshot of the window moves to the new spot), 'fade'
-# (placed while invisible, then fades in), 'popin' (a snapshot grows in, or
-# shrinks out, while fading; `live: true` grows the live window instead),
-# 'gnomed' (unfolds from a line, or folds into one), and 'move' (the live
-# window moves each frame; choppier than 'slide'). All but 'slide' are
-# Windows only.
+# (placed while invisible, then fades in), 'popin' (a closing window's
+# snapshot shrinks while fading), 'gnomed' (folds into a line), and 'move'
+# (the live window moves each frame; choppier than 'slide'). New windows
+# always glide from where they opened, so nothing jumps. All but 'slide'
+# are Windows only.
 #
 # Easings: 'linear', 'ease_in', 'ease_out', 'ease_in_out', 'ease_in_cubic',
 # 'ease_out_cubic', 'ease_in_out_cubic', 'ease_out_quint', or a curve of
@@ -93,9 +94,6 @@ animations:
   # windows:
   #   duration_ms: 180
   #   easing: 'snappy'
-  # windows_in:
-  #   style: 'popin'
-  #   popin_percent: 87
   # windows_out:
   #   style: 'popin'
   #   popin_percent: 95

@@ -317,7 +317,8 @@ workspaces ─┬─ workspaces_in
 
 A node animates once it (or its parent) is set, unless it says `enabled: false`. Each takes `duration_ms`, `easing` and `style`:
 
-- **Windows:** `slide` (a snapshot moves to the new spot; the default for moves), `popin` (grows in from `popin_percent` while fading, or shrinks out; add `live: true` to grow the live window instead of a snapshot), `gnomed` (unfolds from, or folds into, a line), `fade`, and `move` (the live window moves each frame: choppier, but its content stays live).
+- **Windows:** `slide` (a snapshot moves to the new spot; the default), `popin` (shrinks out to `popin_percent` while fading), `gnomed` (folds into a line), `fade`, and `move` (the live window moves each frame: choppier, but its content stays live).
+- **New windows** glide into their place from wherever their app opened them, as a snapshot (or the live window, with `move`). Windows only tells a window manager about a window once it's on screen, so starting anywhere else would show the window and then make it jump; `popin`, `gnomed` and `fade` therefore glide too when a window opens.
 - **Workspaces:** `slide`, `slidevert`, `fade` and `slidefade` (slides `slide_percent` of the monitor while fading).
 - **Easings:** `linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_out_cubic`, `ease_out_quint`, or a curve of your own under `beziers` (`[x1, y1, x2, y2]` as in CSS `cubic-bezier`; y may leave 0–1 to overshoot).
 - **`border`** animates the focused window's border color between the `window_effects` colors.
@@ -334,9 +335,6 @@ animations:
   windows:
     duration_ms: 200
     easing: "snappy"
-  windows_in:
-    style: "popin"
-    popin_percent: 87
   windows_out:
     style: "popin"
     popin_percent: 95
