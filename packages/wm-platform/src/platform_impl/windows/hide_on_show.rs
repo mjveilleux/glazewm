@@ -277,6 +277,12 @@ fn hide(window: &NativeWindow) {
   // app setting its own window styles while it starts up can wipe it out
   // (CI showed Notepad doing so).
   if hidden.contains_key(&handle) {
+    tracing::debug!(
+      target: "glazewm::anim",
+      still_layered = window.has_window_style_ex(WS_EX_LAYERED),
+      "New window shown after being hidden when created."
+    );
+
     if let Err(err) =
       window.set_transparency(&crate::OpacityValue::from_alpha(0))
     {
