@@ -1,0 +1,145 @@
+ffmpeg version 7.1-essentials_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers
+  built with gcc 14.2.0 (Rev1, Built by MSYS2 project)
+  configuration: --enable-gpl --enable-version3 --enable-static --disable-w32threads --disable-autodetect --enable-fontconfig --enable-iconv --enable-gnutls --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-zlib --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-sdl2 --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxvid --enable-libaom --enable-libopenjpeg --enable-libvpx --enable-mediafoundation --enable-libass --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-dxva2 --enable-d3d11va --enable-d3d12va --enable-ffnvcodec --enable-libvpl --enable-nvdec --enable-nvenc --enable-vaapi --enable-libgme --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libtheora --enable-libvo-amrwbenc --enable-libgsm --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-librubberband
+  libavutil      59. 39.100 / 59. 39.100
+  libavcodec     61. 19.100 / 61. 19.100
+  libavformat    61.  7.100 / 61.  7.100
+  libavdevice    61.  3.100 / 61.  3.100
+  libavfilter    10.  4.100 / 10.  4.100
+  libswscale      8.  3.100 /  8.  3.100
+  libswresample   5.  3.100 /  5.  3.100
+  libpostproc    58.  3.100 / 58.  3.100
+[gdigrab @ 000001f484e5a800] Capturing whole desktop as 1024x768x32 at (0,0)
+[gdigrab @ 000001f484e5a800] Stream #0: not enough frames to estimate rate; consider increasing probesize
+Input #0, gdigrab, from 'desktop':
+  Duration: N/A, start: 1793432064.720564, bitrate: 1509975 kb/s
+  Stream #0:0: Video: bmp, bgra, 1024x768, 1509975 kb/s, 60 fps, 1000k tbr, 1000k tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (bmp (native) -> h264 (libx264))
+Press [q] to stop, [?] for help
+[libx264 @ 000001f484e5d840] using cpu capabilities: MMX2 SSE2Fast SSSE3 SSE4.2 AVX FMA3 BMI2 AVX2 AVX512
+[libx264 @ 000001f484e5d840] profile Constrained Baseline, level 3.2, 4:2:0, 8-bit
+[libx264 @ 000001f484e5d840] 264 - core 164 r3192 c24e06c - H.264/MPEG-4 AVC codec - Copyleft 2003-2024 - http://www.videolan.org/x264.html - options: cabac=0 ref=1 deblock=0:0:0 analyse=0:0 me=dia subme=0 psy=1 psy_rd=1.00:0.00 mixed_ref=0 me_range=16 chroma_me=1 trellis=0 8x8dct=0 cqm=0 deadzone=21,11 fast_pskip=1 chroma_qp_offset=0 threads=6 lookahead_threads=1 sliced_threads=0 nr=0 decimate=1 interlaced=0 bluray_compat=0 constrained_intra=0 bframes=0 weightp=0 keyint=250 keyint_min=25 scenecut=0 intra_refresh=0 rc=crf mbtree=0 crf=18.0 qcomp=0.60 qpmin=0 qpmax=69 qpstep=4 ip_ratio=1.40 aq=0
+Output #0, mp4, to 'D:\a\glazewm\glazewm\out-flash\screen.mp4':
+  Metadata:
+    encoder         : Lavf61.7.100
+  Stream #0:0: Video: h264 (avc1 / 0x31637661), yuv420p(tv, progressive), 1024x768, q=2-31, 60 fps, 15360 tbn
+      Metadata:
+        encoder         : Lavc61.19.100 libx264
+      Side data:
+        cpb: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 5888, current: 5888; changing to 5889. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 10752, current: 10752; changing to 10753. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+    Last message repeated 1 times
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 20736, current: 20736; changing to 20737. This may result in incorrect timestamps in the output file.
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 21504, current: 21504; changing to 21505. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 45312, current: 45312; changing to 45313. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 124928, current: 124928; changing to 124929. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 140288, current: 140288; changing to 140289. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 155648, current: 155648; changing to 155649. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+    Last message repeated 1 times
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 182016, current: 182016; changing to 182017. This may result in incorrect timestamps in the output file.
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 183296, current: 183296; changing to 183297. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 198656, current: 198656; changing to 198657. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 214272, current: 214272; changing to 214273. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 229120, current: 229120; changing to 229121. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 254976, current: 254976; changing to 254977. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 274944, current: 274944; changing to 274945. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 290304, current: 290304; changing to 290305. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 306176, current: 306176; changing to 306177. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 321024, current: 321024; changing to 321025. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 336896, current: 336896; changing to 336897. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 352512, current: 352512; changing to 352513. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 362752, current: 362752; changing to 362753. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 378112, current: 378112; changing to 378113. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 393216, current: 393216; changing to 393217. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 398336, current: 398336; changing to 398337. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 428288, current: 428288; changing to 428289. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 444160, current: 444160; changing to 444161. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 459776, current: 459776; changing to 459777. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 470016, current: 470016; changing to 470017. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 475392, current: 475392; changing to 475393. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 485632, current: 485632; changing to 485633. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 490752, current: 490752; changing to 490753. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 501248, current: 501248; changing to 501249. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 516608, current: 516608; changing to 516609. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 531968, current: 531968; changing to 531969. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 578304, current: 578304; changing to 578305. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 593408, current: 593408; changing to 593409. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 598272, current: 598272; changing to 598273. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 613632, current: 613632; changing to 613633. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 624128, current: 624128; changing to 624129. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 640000, current: 640000; changing to 640001. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+    Last message repeated 1 times
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 654592, current: 654592; changing to 654593. This may result in incorrect timestamps in the output file.
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 655104, current: 655104; changing to 655105. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 670208, current: 670208; changing to 670209. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 675072, current: 675072; changing to 675073. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 685568, current: 685568; changing to 685569. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 711936, current: 711936; changing to 711937. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 728320, current: 728320; changing to 728321. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 763136, current: 763136; changing to 763137. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 778240, current: 778240; changing to 778241. This may result in incorrect timestamps in the output file.
+[libx264 @ 000001f484e5d840] non-strictly-monotonic PTS
+[vost#0:0/libx264 @ 000001f484e5d380] Non-monotonic DTS; previous: 788992, current: 788992; changing to 788993. This may result in incorrect timestamps in the output file.
+
+
+[q] command received. Exiting.
+
+[out#0/mp4 @ 000001f484e5cdc0] video:13861KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.109701%
+frame= 2058 fps= 39 q=-1.0 Lsize=   13877KiB time=00:00:53.13 bitrate=2139.5kbits/s speed=0.999x    
+[libx264 @ 000001f484e5d840] frame I:9     Avg QP: 9.56  size:375988
+[libx264 @ 000001f484e5d840] frame P:2049  Avg QP:11.42  size:  5275
+[libx264 @ 000001f484e5d840] mb I  I16..4: 100.0%  0.0%  0.0%
+[libx264 @ 000001f484e5d840] mb P  I16..4:  1.7%  0.0%  0.0%  P16..4:  8.2%  0.0%  0.0%  0.0%  0.0%    skip:90.2%
+[libx264 @ 000001f484e5d840] coded y,uvDC,uvAC intra: 47.9% 7.0% 6.3% inter: 4.1% 0.5% 0.2%
+[libx264 @ 000001f484e5d840] i16 v,h,dc,p: 56% 40%  2%  2%
+[libx264 @ 000001f484e5d840] i8c dc,h,v,p: 81% 16%  3%  1%
+[libx264 @ 000001f484e5d840] kb/s:2135.68
+
