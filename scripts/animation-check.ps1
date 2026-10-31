@@ -82,6 +82,8 @@ animations:
   workspaces:
     style: 'slide'
     duration_ms: $DurationMs
+  border:
+    duration_ms: $DurationMs
 "@
 }
 $config = Join-Path $Out 'config.yaml'
@@ -95,6 +97,12 @@ workspaces:
   - name: '1'
   - name: '2'
   - name: '3'
+# Colored borders, so focus changes show the border animation.
+window_effects:
+  focused_window:
+    border: { enabled: true, color: '#ff8a3d' }
+  other_windows:
+    border: { enabled: true, color: '#3d7aff' }
 $animations
 "@ | Set-Content $config -Encoding utf8
 
