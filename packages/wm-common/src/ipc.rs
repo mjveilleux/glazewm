@@ -5,6 +5,17 @@ use crate::{BindingModeConfig, ContainerDto, TilingDirection, WmEvent};
 
 pub const DEFAULT_IPC_PORT: u32 = 6123;
 
+/// The IPC server's port: `GLAZEWM_IPC_PORT` when set, else 6123. Windows
+/// accounts signed in at once each run their own `GlazeWM`, and a
+/// localhost port is shared by all of them, so each account sets its own.
+#[must_use]
+pub fn ipc_port() -> u32 {
+  std::env::var("GLAZEWM_IPC_PORT")
+    .ok()
+    .and_then(|port| port.trim().parse().ok())
+    .unwrap_or(DEFAULT_IPC_PORT)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "messageType", rename_all = "snake_case")]
 pub enum ServerMessage {

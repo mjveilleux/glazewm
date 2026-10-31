@@ -54,6 +54,27 @@ gaps:
     bottom: '20px'
     left: '20px'
 
+# *Experimental* animation support!
+# Uncomment to enable window move/open animations.
+#
+# `effect_type` is either 'slide' (a snapshot of the window moves from its
+# old position to the new one) or 'fade' (the window is placed while
+# invisible, then fades in; Windows only). Fading new windows in avoids
+# seeing them first at the position the app opened them at.
+#
+# Easings: 'linear', 'ease_in', 'ease_out', 'ease_in_out', 'ease_in_cubic',
+# 'ease_out_cubic', 'ease_in_out_cubic' and 'ease_out_quint'.
+animations:
+  # window_move:
+  #   effect_type: 'slide'
+  #   duration_ms: 180
+  #   easing: 'ease_out_quint'
+  #   trigger_threshold: '10px'
+  # window_open:
+  #   effect_type: 'fade'
+  #   duration_ms: 150
+  #   easing: 'ease_out_cubic'
+
 window_effects:
   # Visual effects to apply to the focused window.
   focused_window:

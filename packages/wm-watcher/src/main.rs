@@ -45,6 +45,9 @@ async fn main() -> anyhow::Result<()> {
           tracing::warn!("Failed to show window: {:?}", err);
         }
 
+        // Windows on other workspaces are cloaked with `hide_method:
+        // cloak`.
+        let _ = window.set_cloaked(false);
         let _ = window.set_taskbar_visibility(true);
         let _ = window.set_border_color(None);
         let _ =

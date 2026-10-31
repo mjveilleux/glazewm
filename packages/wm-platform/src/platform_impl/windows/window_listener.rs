@@ -168,10 +168,18 @@ impl WindowListener {
         is_interactive_end: true,
         notification,
       },
-      EVENT_OBJECT_SHOW | EVENT_OBJECT_UNCLOAKED => WindowEvent::Shown {
-        window: NativeWindow::new(handle.0).into(),
-        notification,
-      },
+      EVENT_OBJECT_SHOW | EVENT_OBJECT_UNCLOAKED => {
+        // A new window: hidden right away (if enabled), before this event
+        // reaches the WM, which then fades it in where it belongs.
+        if event_type == EVENT_OBJECT_SHOW {
+          super::hide_on_show::hide_if_app_window(handle.0);
+        }
+
+        WindowEvent::Shown {
+          window: NativeWindow::new(handle.0).into(),
+          notification,
+        }
+      }
       EVENT_OBJECT_NAMECHANGE => WindowEvent::TitleChanged {
         window: NativeWindow::new(handle.0).into(),
         notification,
@@ -179,9 +187,11 @@ impl WindowListener {
       _ => return,
     };
 
-    if let Err(err) = event_tx.send(event) {
-      tracing::warn!("Failed to send window event: {}.", err);
-    }
+    // The only way this fails is the WM having dropped its receiver, i.e.
+    // it's shutting down. Not logged: this hook still runs while the
+    // process exits (releasing COM pumps messages from a TLS destructor),
+    // and logging then panics on the logger's own, already destroyed, TLS.
+    let _ = event_tx.send(event);
   }
 }
 

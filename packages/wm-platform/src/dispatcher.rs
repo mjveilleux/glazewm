@@ -20,10 +20,10 @@ use objc2_core_foundation::{CFBoolean, CFDictionary, CGPoint};
 #[cfg(target_os = "macos")]
 use objc2_core_graphics::{CGError, CGEvent, CGWarpMouseCursorPosition};
 #[cfg(target_os = "macos")]
-use objc2_foundation::NSString;
+use objc2_foundation::{NSString, NSUserDefaults};
 #[cfg(target_os = "windows")]
 use windows::{
-  core::PCWSTR,
+  core::{w, PCWSTR},
   Win32::{
     Foundation::POINT,
     System::Environment::ExpandEnvironmentStringsW,
@@ -36,10 +36,10 @@ use windows::{
         SHELLEXECUTEINFOW,
       },
       WindowsAndMessaging::{
-        GetCursorPos, MessageBoxW, SetCursorPos, SystemParametersInfoW,
-        ANIMATIONINFO, MB_ICONERROR, MB_OK, MB_SYSTEMMODAL,
-        SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SPI_GETANIMATION,
-        SPI_SETANIMATION, SW_HIDE, SW_NORMAL,
+        FindWindowExW, FindWindowW, GetCursorPos, MessageBoxW,
+        SetCursorPos, SystemParametersInfoW, ANIMATIONINFO, MB_ICONERROR,
+        MB_OK, MB_SYSTEMMODAL, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE,
+        SPI_GETANIMATION, SPI_SETANIMATION, SW_HIDE, SW_NORMAL,
         SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
       },
     },
@@ -84,6 +84,16 @@ pub trait DispatcherExtMacOs {
   ///
   /// This method is only available on macOS.
   fn has_ax_permission(&self, prompt: bool) -> bool;
+
+  /// Gets whether displays have separate spaces.
+  ///
+  /// This setting is present in System Preferences under "Desktop & Dock"
+  /// > "Mission Control" > "Displays have separate Spaces".
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on macOS.
+  fn displays_have_separate_spaces(&self) -> bool;
 }
 
 #[cfg(target_os = "macos")]
@@ -99,6 +109,15 @@ impl DispatcherExtMacOs for Dispatcher {
     );
 
     unsafe { AXIsProcessTrustedWithOptions(Some(options.as_ref())) }
+  }
+
+  fn displays_have_separate_spaces(&self) -> bool {
+    let defaults = NSUserDefaults::new();
+    defaults.addSuiteNamed(&NSString::from_str("com.apple.spaces"));
+
+    // When "spans-displays" is false or absent, "Displays have separate
+    // Spaces" is enabled.
+    !defaults.boolForKey(&NSString::from_str("spans-displays"))
   }
 }
 
@@ -132,6 +151,16 @@ pub trait DispatcherExtWindows {
   ///
   /// This method is only available on Windows.
   fn deregister_wndproc_callback(&self, id: usize) -> crate::Result<()>;
+
+  /// Gets whether the taskbar's notification area exists, so that tray
+  /// icons can be added.
+  ///
+  /// It doesn't while Explorer is starting (e.g. right after sign-in).
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  fn is_taskbar_ready(&self) -> bool;
 
   /// Gets whether system-wide window transition animations are enabled.
   ///
@@ -203,6 +232,23 @@ impl DispatcherExtWindows for Dispatcher {
       .as_ref()
       .unwrap()
       .deregister_wndproc_callback(id)
+  }
+
+  fn is_taskbar_ready(&self) -> bool {
+    // SAFETY: `FindWindowW` and `FindWindowExW` only read the given class
+    // names and return a null handle when no window matches.
+    unsafe {
+      let taskbar = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null());
+
+      taskbar.0 != 0
+        && FindWindowExW(
+          taskbar,
+          None,
+          w!("TrayNotifyWnd"),
+          PCWSTR::null(),
+        )
+        .0 != 0
+    }
   }
 
   fn window_animations_enabled(&self) -> crate::Result<bool> {
@@ -436,6 +482,15 @@ impl Dispatcher {
     result_rx
       .recv_timeout(std::time::Duration::from_secs(5))
       .map_err(crate::Error::ChannelRecv)
+  }
+
+  /// Whether the event loop has stopped.
+  ///
+  /// Once stopped, `dispatch_sync` and `dispatch_async` return
+  /// `Error::EventLoopStopped`.
+  #[must_use]
+  pub fn is_stopped(&self) -> bool {
+    self.stopped.load(Ordering::SeqCst)
   }
 
   /// Gets the thread ID of the event loop thread.

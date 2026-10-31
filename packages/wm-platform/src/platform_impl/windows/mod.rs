@@ -1,13 +1,16 @@
+mod animation_window;
 pub(crate) mod com;
 mod display;
 mod display_listener;
 mod event_loop;
+pub(crate) mod hide_on_show;
 mod keyboard_hook;
 mod mouse_listener;
 mod native_window;
 mod single_instance;
 mod window_listener;
 
+pub(crate) use animation_window::*;
 pub(crate) use display::*;
 pub(crate) use display_listener::*;
 pub(crate) use event_loop::*;

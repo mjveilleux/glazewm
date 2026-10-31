@@ -16,9 +16,9 @@ use windows::{
     UI::WindowsAndMessaging::{
       CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
       GetMessageW, PostMessageW, PostThreadMessageW, RegisterClassW,
-      RegisterWindowMessageW, SendMessageW, TranslateMessage, CS_HREDRAW,
-      CS_VREDRAW, CW_USEDEFAULT, MSG, WINDOW_EX_STYLE, WM_QUIT, WNDCLASSW,
-      WNDPROC, WS_OVERLAPPEDWINDOW,
+      RegisterWindowMessageW, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
+      CW_USEDEFAULT, MSG, WINDOW_EX_STYLE, WM_QUIT, WNDCLASSW, WNDPROC,
+      WS_OVERLAPPEDWINDOW,
     },
   },
 };
@@ -101,16 +101,13 @@ impl EventLoopSource {
       Box::new(Box::new(dispatch_fn));
     let callback_ptr = Box::into_raw(dispatch_fn);
 
-    // `SendMessageW` blocks the calling thread until the window procedure
-    // processes the message and executes the closure. This guarantees the
-    // closure's lifetime remains valid.
     unsafe {
-      SendMessageW(
+      PostMessageW(
         HWND(self.message_window_handle),
         WM_DISPATCH_CALLBACK.with(|v| *v),
         WPARAM(callback_ptr as _),
         LPARAM(0),
-      );
+      )?;
     }
 
     Ok(())
@@ -199,6 +196,12 @@ impl EventLoop {
 
     tracing::info!("Event loop thread exiting.");
     unsafe { DestroyWindow(HWND(self.source.message_window_handle)) }?;
+
+    // This is the main thread, and animations use COM on it. Its COM
+    // objects (proxies into Explorer) are released now, while that still
+    // works: left to the thread's TLS destructor, they'd be released while
+    // the process exits, which stalls it.
+    super::com::release_thread_com();
 
     Ok(())
   }

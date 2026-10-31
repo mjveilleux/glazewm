@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use wm_platform::{
-  Color, CornerStyle, Key, Keybinding, LengthValue, OpacityValue,
-  RectDelta,
+  Color, CornerStyle, EasingFunction, Key, Keybinding, LengthValue,
+  OpacityValue, RectDelta,
 };
 
 use crate::app_command::InvokeCommand;
@@ -9,6 +9,7 @@ use crate::app_command::InvokeCommand;
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, rename_all(serialize = "camelCase"))]
 pub struct ParsedConfig {
+  pub animations: AnimationsConfig,
   pub binding_modes: Vec<BindingModeConfig>,
   pub gaps: GapsConfig,
   pub general: GeneralConfig,
@@ -385,6 +386,83 @@ pub struct WorkspaceConfig {
 
   #[serde(default = "default_bool::<false>")]
   pub keep_alive: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default, rename_all(serialize = "camelCase"))]
+pub struct AnimationsConfig {
+  pub window_move: Option<WindowMoveAnimationConfig>,
+  pub window_open: Option<AnimationEffectConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, rename_all(serialize = "camelCase"))]
+pub struct WindowMoveAnimationConfig {
+  /// Minimum distance to trigger movement animations.
+  pub trigger_threshold: LengthValue,
+
+  #[serde(flatten)]
+  pub effect: AnimationEffectConfig,
+}
+
+impl Default for WindowMoveAnimationConfig {
+  fn default() -> Self {
+    WindowMoveAnimationConfig {
+      trigger_threshold: LengthValue::from_px(10),
+      effect: AnimationEffectConfig::default(),
+    }
+  }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, rename_all(serialize = "camelCase"))]
+pub struct AnimationEffectConfig {
+  pub effect_type: AnimationEffect,
+  pub duration_ms: u32,
+  pub easing: EasingFunction,
+}
+
+impl Default for AnimationEffectConfig {
+  fn default() -> Self {
+    AnimationEffectConfig {
+      effect_type: AnimationEffect::default(),
+      duration_ms: 200,
+      easing: EasingFunction::default(),
+    }
+  }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnimationEffect {
+  /// Slide animation effect. A snapshot of the window moves and scales
+  /// from its old position to its new one.
+  #[default]
+  Slide,
+
+  /// Fade animation effect. The window is placed at its new position
+  /// while invisible, then fades in.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Not supported; the window moves without animation.
+  Fade,
+
+  /// Move animation effect, as in Hyprland: the window itself, live,
+  /// moves and resizes a little each frame until it's in place.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Not supported; the window moves without animation.
+  Move,
+
+  /// Pop-in animation effect, as in Hyprland: the window itself grows
+  /// from 87% of its size to its place while fading in. For new windows.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Not supported; the window moves without animation.
+  Popin,
 }
 
 /// Helper function for setting a default value for a boolean field.

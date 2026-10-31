@@ -34,6 +34,7 @@ use crate::{
   wm::WindowManager,
 };
 
+mod animation_manager;
 mod commands;
 mod events;
 mod ipc_server;
@@ -124,7 +125,7 @@ async fn start_wm(
   let mut config = UserConfig::new(config_path)?;
 
   // Add application icon to system tray.
-  let mut tray = SystemTray::new(&config.path, dispatcher.clone())?;
+  let mut tray = SystemTray::new(&config.path, dispatcher.clone());
 
   let mut wm = WindowManager::new(&mut config, dispatcher.clone())?;
 
@@ -152,6 +153,11 @@ async fn start_wm(
 
   // Start listening for platform events after populating initial state.
   let mut window_listener = WindowListener::new(dispatcher)?;
+
+  #[cfg(target_os = "windows")]
+  wm_platform::set_hide_windows_on_show(
+    animation_manager::hides_new_windows(&config),
+  );
   let mut display_listener = DisplayListener::new(dispatcher)?;
   let mut mouse_listener = MouseListener::new(
     if config.value.general.focus_follows_cursor {
@@ -220,6 +226,14 @@ async fn start_wm(
         } else {
           wm.state.cleanup_invalid_windows()
         }
+      },
+      Some(()) = wm.state.animation_manager.tick_rx.recv() => {
+        wm.update_animations(&config)
+      },
+      () = tokio::time::sleep_until(tokio::time::Instant::from_std(
+        wm.state.settle_deadline.unwrap_or_else(std::time::Instant::now),
+      )), if wm.state.settle_deadline.is_some() => {
+        wm.end_settle(&config)
       },
       Some((
         message,
