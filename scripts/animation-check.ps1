@@ -268,7 +268,12 @@ $lines += ''
 $lines += 'timing (ms; reported, not checked)'
 $lines += "  start (asked for to first frame): $(Get-Spread ($anim | Where-Object { $_ -match 'First animation frame' } | ForEach-Object { Get-Field $_ 'start_ms' }))"
 $lines += "  window capture: $(Get-Spread ($anim | Where-Object { $_ -match 'Window captured' } | ForEach-Object { Get-Field $_ 'capture_ms' }))"
-$lines += '  runs: frames | interval mean / p95 / max | late (>1.5 periods) | period | duration | dwm composed / expected, dropped'
+$lines += '  compositor frames during each run (what is seen): frames | interval mean / p95 / max | late (>1.5 periods) | period'
+foreach ($run in $anim | Where-Object { $_ -match 'Compositor frames' }) {
+    $f = { param($n) Get-Field $run $n }
+    $lines += "    $(& $f frames) | $(& $f mean_ms) / $(& $f p95_ms) / $(& $f max_ms) | $(& $f late) | $(& $f period_ms)"
+}
+$lines += '  WM ticks during each run (0 frames: the compositor played it alone): frames | interval mean / p95 / max | late | period | duration | dwm composed / expected, dropped'
 foreach ($run in $anim | Where-Object { $_ -match 'Animation frames' }) {
     $f = { param($n) Get-Field $run $n }
     $lines += "    $(& $f frames) | $(& $f mean_ms) / $(& $f p95_ms) / $(& $f max_ms) | $(& $f late) | $(& $f period_ms) | $(& $f duration_ms) | $(& $f dwm_composed) / $(& $f dwm_expected), $(& $f dwm_dropped)"
