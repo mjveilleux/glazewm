@@ -143,3 +143,22 @@ Run on GitHub's Windows Server 2025 runner (`scripts/capture-spike.ps1`, results
 | layered alpha 0 (uncloaked) | a full frame in 94–103 ms, 96–100% drawn; the screenshot shows all four windows invisible |
 
 So no texture cache: outgoing windows are captured just before they're hidden, and incoming ones are uncloaked at alpha 0, captured, then revealed. The capture costs one capture's latency at the start of a switch (1–3 frames with a GPU). This is the design section 3 already chose; nothing changes. `DwmRegisterThumbnail` wasn't needed. UWP apps weren't testable (none on Windows Server); for them the transition falls back to no animation if a capture fails (as every animation does).
+
+### Phase 5.2: dimming inactive windows
+
+Run on the same runner (`scripts/dim-spike.ps1`, results on `ci/dim-spike--claude-hyprland-parity`): a dark, 40% opaque, click-through helper window placed exactly over a Notepad and ordered just above it, while focus moves between that Notepad, a second one and a floating third.
+
+| Step | Z-order, top to bottom | Right? |
+|---|---|---|
+| dim placed over A, B focused | B > dim > A > C | yes |
+| A focused by the OS (a click) | A > B > dim > C | yes: A rises above its dim at once |
+| dim put back above A by the WM | B > dim > A > C | no: ordering the dim relative to A moved A itself below B |
+| C focused | C > B > dim > A | yes |
+
+What it showed:
+
+- A helper window can dim a window from just above it, and windows raised above it (focused, floating) stay undimmed.
+- Keeping it there isn't robust. Ordering the helper relative to its window has to go through the window above the target (`GW_HWNDPREV`), which changes under the WM's feet. Any z-order change an app makes on its own (raising itself, always-on-top toggles, owned popups) comes as a coarse `EVENT_OBJECT_REORDER` with no window named, so the dims are wrong for at least a frame each time, until every one is re-placed.
+- Each dimmed window costs a full-size layered window in the compositor, doubling the layers on screen.
+
+Dropped, as section 3 planned for this outcome. `window_effects.other_windows.transparency` already gives inactive windows a muted look without any of this.
