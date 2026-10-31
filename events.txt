@@ -1,0 +1,9 @@
+28	start glazewm
+610	glazewm ready
+5655	open notepad 1
+7741	open notepad 2
+9779	open notepad 3
+11811	close notepad 2
+12014	close overlays up: 1
+14041	move window left
+16306	done
