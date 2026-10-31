@@ -51,8 +51,9 @@ use crate::{
   wm_state::WmState,
 };
 
-/// How long a new window must stay before the others make room for it
-/// (see `WindowManager::should_settle`).
+/// How long a new window must stay before the others make room for it,
+/// at most (see `WindowManager::should_settle`): the settle ends early
+/// once it has drawn.
 const SETTLE_DELAY: Duration = Duration::from_millis(100);
 
 pub struct WindowManager {
@@ -156,6 +157,20 @@ impl WindowManager {
         // The settle counts towards how long its animations take to start.
         state.animation_manager.mark_request();
         state.settle_deadline = Some(Instant::now() + SETTLE_DELAY);
+
+        // It ends early once the new windows have drawn.
+        let new_windows = state
+          .pending_sync
+          .open_animation_windows()
+          .iter()
+          .map(|window| window.native().clone())
+          .collect::<Vec<_>>();
+
+        state.settle_drawn = state.animation_manager.watch_drawn(
+          new_windows,
+          SETTLE_DELAY,
+          &state.dispatcher,
+        );
       } else {
         platform_sync(state, config)?;
       }
@@ -194,6 +209,7 @@ impl WindowManager {
   /// Runs the sync a settle held back, once it's due.
   pub fn end_settle(&mut self, config: &UserConfig) -> anyhow::Result<()> {
     self.state.settle_deadline = None;
+    self.state.settle_drawn = None;
 
     // Animations that finished meanwhile were left at their end, so they
     // end now, with the same sync.

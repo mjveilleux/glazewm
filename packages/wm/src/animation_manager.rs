@@ -504,7 +504,7 @@ pub struct AnimationManager {
 
   /// Shared GPU context for animation overlay windows. Lazily
   /// initialized on the first slide.
-  context: Option<AnimationContext>,
+  context: Option<std::sync::Arc<AnimationContext>>,
 
   /// Handle to the running tick task, if any.
   #[cfg(not(target_os = "windows"))]
@@ -1092,6 +1092,42 @@ impl AnimationManager {
     self.update_ticking();
   }
 
+  /// Watches new windows until each has drawn a frame, on a thread of its
+  /// own, for a settle to end as soon as they have (see
+  /// `WindowManager::should_settle`).
+  ///
+  /// Returns a receiver that gets a message once every window has drawn
+  /// within `timeout`; it's dropped unsent otherwise. `None` if there's
+  /// nothing to watch with.
+  pub fn watch_drawn(
+    &mut self,
+    windows: Vec<NativeWindow>,
+    timeout: Duration,
+    dispatcher: &Dispatcher,
+  ) -> Option<tokio::sync::oneshot::Receiver<()>> {
+    if windows.is_empty() || !self.ensure_context(dispatcher) {
+      return None;
+    }
+
+    let context = self.context.clone()?;
+    let (drawn_tx, drawn_rx) = tokio::sync::oneshot::channel();
+
+    let spawned = std::thread::Builder::new()
+      .name("animation-draw-probe".to_string())
+      .spawn(move || {
+        if context.wait_until_drawn(&windows, timeout) {
+          let _ = drawn_tx.send(());
+        }
+      });
+
+    if let Err(err) = spawned {
+      tracing::debug!("Failed to start the draw probe: {err}");
+      return None;
+    }
+
+    Some(drawn_rx)
+  }
+
   /// Creates the shared GPU context on first use.
   ///
   /// Returns `false` when it couldn't be made; the animation is then
@@ -1100,14 +1136,18 @@ impl AnimationManager {
     // A lost GPU device (e.g. a driver update) can't draw anymore. Running
     // animations still end on time and give their windows back; new ones
     // get a new context, or don't animate.
-    if self.context.as_ref().is_some_and(AnimationContext::is_lost) {
+    if self
+      .context
+      .as_ref()
+      .is_some_and(|context| context.is_lost())
+    {
       tracing::warn!("GPU device lost; recreating the animation context.");
       self.context = None;
     }
 
     if self.context.is_none() {
       match AnimationContext::new(dispatcher) {
-        Ok(context) => self.context = Some(context),
+        Ok(context) => self.context = Some(std::sync::Arc::new(context)),
         Err(err) => {
           tracing::warn!("Failed to create animation context: {err}");
           return false;

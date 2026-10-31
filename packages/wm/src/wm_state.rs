@@ -42,6 +42,10 @@ pub struct WmState {
   /// until then.
   pub settle_deadline: Option<Instant>,
 
+  /// Gets a message once every window a settle waits for has drawn, to
+  /// end the settle early.
+  pub settle_drawn: Option<tokio::sync::oneshot::Receiver<()>>,
+
   /// Manager for window animations.
   pub animation_manager: AnimationManager,
 
@@ -98,6 +102,7 @@ impl WmState {
       dispatcher,
       pending_sync: PendingSync::default(),
       settle_deadline: None,
+      settle_drawn: None,
       prev_effects_window: None,
       recent_workspace_name: None,
       unmanaged_or_minimized_timestamp: None,

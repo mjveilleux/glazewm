@@ -247,6 +247,15 @@ async fn start_wm(
       )), if wm.state.settle_deadline.is_some() => {
         wm.end_settle(&config)
       },
+      drawn = settle_drawn(&mut wm.state.settle_drawn) => {
+        wm.state.settle_drawn = None;
+
+        if drawn {
+          wm.end_settle(&config)
+        } else {
+          Ok(())
+        }
+      },
       Some((
         message,
         response_tx,
@@ -322,6 +331,18 @@ async fn start_wm(
   wm.cleanup(&mut config, &mut ipc_server);
 
   Ok(())
+}
+
+/// Waits for the new windows of a settle to have drawn.
+///
+/// Returns whether they did; never returns without a settle to wait for.
+async fn settle_drawn(
+  drawn: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+) -> bool {
+  match drawn {
+    Some(drawn) => drawn.await.is_ok(),
+    None => std::future::pending().await,
+  }
 }
 
 /// Initialize logging with the specified verbosity level.

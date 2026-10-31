@@ -34,6 +34,24 @@ impl AnimationContext {
     self.inner.is_lost()
   }
 
+  /// Blocks until each window has drawn a frame the compositor can show,
+  /// or `timeout` passes. Windows at an opacity of 0 count: they still
+  /// draw.
+  ///
+  /// Returns whether every window drew in time.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Returns `false` at once; windows can't be probed.
+  #[must_use]
+  pub fn wait_until_drawn(
+    &self,
+    windows: &[NativeWindow],
+    timeout: Duration,
+  ) -> bool {
+    self.inner.wait_until_drawn(windows, timeout)
+  }
+
   /// Executes `update_fn` inside a compositor transaction.
   ///
   /// Used with [`AnimationWindow::update`] to commit all updates together

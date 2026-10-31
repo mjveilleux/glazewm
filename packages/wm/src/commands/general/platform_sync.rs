@@ -30,6 +30,7 @@ pub fn platform_sync(
 ) -> anyhow::Result<()> {
   // Any sync takes along the changes a settle was holding back.
   state.settle_deadline = None;
+  state.settle_drawn = None;
 
   // Animations this sync starts were asked for now, or when a settle
   // began holding the sync back.
