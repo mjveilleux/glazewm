@@ -44,9 +44,11 @@ $glazewm = (Resolve-Path "$Bin\glazewm.exe").Path
 $cli = (Resolve-Path "$Bin\glazewm-cli.exe").Path
 
 # Animations only, everything else default; slowed so each one spans many frames. Or the one asked for.
+# (Taken first: PowerShell's names ignore case, so $config below is this same variable.)
+$asked = if ($Config) { (Resolve-Path -LiteralPath $Config).Path }
 $config = Join-Path $Out 'config.yaml'
-if ($Config) {
-    Copy-Item -LiteralPath (Resolve-Path -LiteralPath $Config).Path $config -Force
+if ($asked) {
+    Copy-Item -LiteralPath $asked $config -Force
 } else {
 @"
 general:
