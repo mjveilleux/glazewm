@@ -6,9 +6,7 @@ use std::{
 use anyhow::Context;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use wm_common::{
-  AnimationEffect, AnimationEffectConfig, AnimationsConfig,
-};
+use wm_common::{AnimationEffect, AnimationEffectConfig};
 #[cfg(target_os = "macos")]
 use wm_platform::DispatcherExtMacOs;
 #[cfg(target_os = "windows")]
@@ -32,17 +30,12 @@ use crate::{
 #[cfg(target_os = "windows")]
 pub fn hides_new_windows(config: &UserConfig) -> bool {
   config.value.general.hide_method == wm_common::HideMethod::Cloak
-    && config
-      .value
-      .animations
-      .window_open
-      .as_ref()
-      .is_some_and(|open| {
-        matches!(
-          open.effect_type,
-          AnimationEffect::Fade | AnimationEffect::Popin
-        )
-      })
+    && config.value.animations.open_effect().is_some_and(|open| {
+      matches!(
+        open.effect_type,
+        AnimationEffect::Fade | AnimationEffect::Popin
+      )
+    })
 }
 
 /// Size a pop-in starts at, relative to the window's (Hyprland's
@@ -477,27 +470,21 @@ impl AnimationManager {
       return None;
     }
 
-    let effect = match (trigger, &config.value.animations) {
-      (
-        AnimationTrigger::WindowOpened,
-        AnimationsConfig {
-          window_open: Some(open_config),
-          ..
-        },
-      ) => {
+    let animations = &config.value.animations;
+
+    let effect = match trigger {
+      AnimationTrigger::WindowOpened => {
+        let open_config = animations.open_effect()?;
+
         if self.is_animating(&window.id()) {
           return None;
         }
 
         open_config
       }
-      (
-        AnimationTrigger::WindowMoved,
-        AnimationsConfig {
-          window_move: Some(move_config),
-          ..
-        },
-      ) => {
+      AnimationTrigger::WindowMoved => {
+        let move_config = animations.move_effect()?;
+
         // A fade in progress already hides the move.
         if self.fades.contains_key(&window.id()) {
           return None;
@@ -520,7 +507,8 @@ impl AnimationManager {
           + (prev_rect.width() - target_rect.width()).abs()
           + (prev_rect.height() - target_rect.height()).abs();
 
-        // TODO: Validate config to only allow pixel values.
+        // Always in pixels: checked when the config is read
+        // (`AnimationsConfig::validate`).
         #[allow(clippy::cast_possible_truncation)]
         let threshold_px = move_config.trigger_threshold.amount as i32;
 
@@ -530,7 +518,6 @@ impl AnimationManager {
 
         &move_config.effect
       }
-      _ => return None,
     };
 
     match effect.effect_type {

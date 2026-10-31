@@ -72,7 +72,8 @@ impl UserConfig {
 
     // TODO: Improve error formatting of serde_yaml errors. Something
     // similar to https://github.com/AlexanderThaller/format_serde_error
-    let config_value = serde_yaml::from_str(&config_str)?;
+    let config_value: ParsedConfig = serde_yaml::from_str(&config_str)?;
+    config_value.animations.validate()?;
 
     Ok((config_value, config_str))
   }

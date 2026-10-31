@@ -75,6 +75,12 @@ pub fn reload_config(
     .pending_sync
     .queue_container_to_redraw(state.root_container.clone());
 
+  // With animations turned off, running ones end now (their overlays go,
+  // hidden windows get their opacity back) instead of playing out.
+  if !config.value.animations.enabled {
+    state.pending_sync.set_skip_animations(true);
+  }
+
   // Emit the updated config.
   state.emit_event(WmEvent::UserConfigChanged {
     config_path: config

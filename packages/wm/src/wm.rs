@@ -179,14 +179,9 @@ impl WindowManager {
       // Only for slides: they start late anyway, and live moves are cheap
       // to turn around.
       !state.pending_sync.open_animation_windows().is_empty()
-        && config
-          .value
-          .animations
-          .window_move
-          .as_ref()
-          .is_some_and(|m| {
-            m.effect.effect_type == wm_common::AnimationEffect::Slide
-          })
+        && config.value.animations.move_effect().is_some_and(|m| {
+          m.effect.effect_type == wm_common::AnimationEffect::Slide
+        })
         && crate::animation_manager::hides_new_windows(config)
     }
 

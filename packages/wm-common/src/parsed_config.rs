@@ -1,7 +1,8 @@
+use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use wm_platform::{
-  Color, CornerStyle, EasingFunction, Key, Keybinding, LengthValue,
-  OpacityValue, RectDelta,
+  Color, CornerStyle, EasingFunction, Key, Keybinding, LengthUnit,
+  LengthValue, OpacityValue, RectDelta,
 };
 
 use crate::app_command::InvokeCommand;
@@ -388,11 +389,85 @@ pub struct WorkspaceConfig {
   pub keep_alive: bool,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all(serialize = "camelCase"))]
 pub struct AnimationsConfig {
+  /// Whether any window animation runs. Off keeps the settings below for
+  /// when it's turned on again.
+  pub enabled: bool,
+
   pub window_move: Option<WindowMoveAnimationConfig>,
   pub window_open: Option<AnimationEffectConfig>,
+
+  /// How a window closed by the `close` command leaves: `fade` fades a
+  /// snapshot of it out; `popin` also shrinks it a little (to 95%).
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Not supported; the window closes without animation.
+  pub window_close: Option<AnimationEffectConfig>,
+}
+
+impl Default for AnimationsConfig {
+  fn default() -> Self {
+    AnimationsConfig {
+      enabled: true,
+      window_move: None,
+      window_open: None,
+      window_close: None,
+    }
+  }
+}
+
+impl AnimationsConfig {
+  /// The open animation, when animations are enabled and it's configured.
+  #[must_use]
+  pub fn open_effect(&self) -> Option<&AnimationEffectConfig> {
+    self.window_open.as_ref().filter(|_| self.enabled)
+  }
+
+  /// The move animation, when animations are enabled and it's configured.
+  #[must_use]
+  pub fn move_effect(&self) -> Option<&WindowMoveAnimationConfig> {
+    self.window_move.as_ref().filter(|_| self.enabled)
+  }
+
+  /// The close animation, when animations are enabled and it's
+  /// configured.
+  #[must_use]
+  pub fn close_effect(&self) -> Option<&AnimationEffectConfig> {
+    self.window_close.as_ref().filter(|_| self.enabled)
+  }
+
+  /// Checks the values serde can't: a move's trigger threshold is a
+  /// distance in pixels, and a closing window can only fade (or pop) out.
+  ///
+  /// Checked whether or not animations are enabled, so turning them on
+  /// never surfaces an old mistake.
+  pub fn validate(&self) -> anyhow::Result<()> {
+    if let Some(move_config) = &self.window_move {
+      if move_config.trigger_threshold.unit != LengthUnit::Pixel {
+        bail!(
+          "`animations.window_move.trigger_threshold` must be in pixels \
+           (e.g. '10px')."
+        );
+      }
+    }
+
+    if let Some(close_config) = &self.window_close {
+      if !matches!(
+        close_config.effect_type,
+        AnimationEffect::Fade | AnimationEffect::Popin
+      ) {
+        bail!(
+          "`animations.window_close.effect_type` must be 'fade' or \
+           'popin'."
+        );
+      }
+    }
+
+    Ok(())
+  }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -548,5 +623,87 @@ where
   #[cfg(not(target_os = "macos"))]
   {
     Ok(method)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{
+    AnimationEffect, AnimationEffectConfig, AnimationsConfig,
+    WindowMoveAnimationConfig,
+  };
+
+  /// An `AnimationsConfig` with every animation configured.
+  fn all_on() -> AnimationsConfig {
+    AnimationsConfig {
+      window_open: Some(AnimationEffectConfig::default()),
+      window_move: Some(WindowMoveAnimationConfig::default()),
+      window_close: Some(AnimationEffectConfig {
+        effect_type: AnimationEffect::Popin,
+        ..AnimationEffectConfig::default()
+      }),
+      ..AnimationsConfig::default()
+    }
+  }
+
+  /// Parses an `animations` section from JSON (YAML maps the same way).
+  fn parse(json: &str) -> AnimationsConfig {
+    serde_json::from_str(json).expect("animations should parse")
+  }
+
+  #[test]
+  fn enabled_by_default() {
+    assert!(AnimationsConfig::default().enabled);
+    assert!(parse("{}").enabled);
+    assert!(all_on().open_effect().is_some());
+    assert!(all_on().move_effect().is_some());
+    assert!(all_on().close_effect().is_some());
+  }
+
+  #[test]
+  fn disabled_hides_every_effect_but_keeps_them() {
+    let config = AnimationsConfig {
+      enabled: false,
+      ..all_on()
+    };
+
+    assert!(config.open_effect().is_none());
+    assert!(config.move_effect().is_none());
+    assert!(config.close_effect().is_none());
+    assert!(config.window_open.is_some());
+    assert!(config.window_close.is_some());
+  }
+
+  #[test]
+  fn disabled_parses_with_its_settings() {
+    let config = parse(
+      r#"{ "enabled": false, "window_open": { "effect_type": "fade" } }"#,
+    );
+
+    assert!(!config.enabled);
+    assert!(config.window_open.is_some());
+    assert!(config.open_effect().is_none());
+  }
+
+  #[test]
+  fn threshold_must_be_in_pixels() {
+    let pixels =
+      parse(r#"{ "window_move": { "trigger_threshold": "10px" } }"#);
+    assert!(pixels.validate().is_ok());
+
+    let percent =
+      parse(r#"{ "window_move": { "trigger_threshold": "10%" } }"#);
+    assert!(percent.validate().is_err());
+  }
+
+  #[test]
+  fn close_only_fades_or_pops() {
+    assert!(all_on().validate().is_ok());
+
+    let fade = parse(r#"{ "window_close": { "effect_type": "fade" } }"#);
+    assert!(fade.validate().is_ok());
+
+    let slide = parse(r#"{ "window_close": { "effect_type": "slide" } }"#);
+    assert!(slide.validate().is_err());
   }
 }
