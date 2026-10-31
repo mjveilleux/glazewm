@@ -126,4 +126,6 @@ Timings are from the `animation-check` workflow (slowed run, 600 ms animations),
 
 | Phase | Status | Notes |
 |---|---|---|
-| 0 | in progress | |
+| 0 | code done; baseline pending | `glazewm::anim` logs start latency, capture latency, frame intervals (mean / p95 / max / late) and DWM's composed / dropped frames per run. `checks.txt` gets the timing table and an exact-final-frame check. The baseline needs the `animation-check` workflow, which is disabled in the repo's Actions settings. |
+| 1 | code done; CI pending | Cubic beziers (baked, overshoot allowed), the node tree with inheritance, fade nodes for opacity, deprecated keys mapped in, ≥ 1 px clamp, Windows' Animation effects setting followed. Unit tests run in the lint workflow. |
+| 2–7 | not started | Blocked on the `animation-check` workflow: every later phase's acceptance is measured there. |
