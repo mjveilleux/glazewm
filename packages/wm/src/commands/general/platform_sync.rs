@@ -15,7 +15,8 @@ use wm_platform::{OpacityValue, Rect, WindowZOrder};
 
 use crate::{
   animation_manager::{
-    AnimationPlan, AnimationTrigger, LiveRequest, SlideRequest,
+    entrance_scale, AnimationPlan, AnimationTrigger, LiveRequest,
+    SlideRequest,
   },
   models::{Container, WindowContainer},
   traits::{CommonGetters, PositionGetters, WindowGetters},
@@ -409,9 +410,10 @@ fn redraw_containers(
       .start_prepared_slides(&state.dispatcher);
   }
 
-  // Windows arriving with a switch are shown at an opacity of 0, to be
-  // captured and slide in.
-  let arriving = switch.as_ref().map_or_else(Vec::new, |switch| {
+  // Windows captured once placed, at an opacity of 0: those arriving with
+  // a switch, and new windows growing in (captured at their own size, not
+  // the one their app opened them at).
+  let mut placed_first = switch.as_ref().map_or_else(Vec::new, |switch| {
     redraws
       .iter()
       .filter(|redraw| redraw.switch_role == Some(SwitchRole::Arriving))
@@ -419,7 +421,26 @@ fn redraw_containers(
       .collect::<Vec<_>>()
   });
 
-  let arriving_ids = arriving
+  placed_first.extend(redraws.iter().filter_map(|redraw| {
+    match &redraw.animation_plan {
+      Some(AnimationPlan::SnapshotIn(effect)) => Some(SlideRequest {
+        start_rect: Some(redraw.target_rect.clone()),
+        // Fading in (at once, if fades are off).
+        opacity: effect.fade.as_ref().map(|_| (0.0, 1.0)),
+        fade: effect.fade.clone(),
+        scale: Some((entrance_scale(effect), (1.0, 1.0))),
+        ..SlideRequest::new(
+          redraw.window.clone(),
+          effect.clone(),
+          redraw.target_rect.clone(),
+          redraw.frame_rate,
+        )
+      }),
+      _ => None,
+    }
+  }));
+
+  let placed_first_ids = placed_first
     .iter()
     .map(|request| request.window.id())
     .collect::<HashSet<_>>();
@@ -453,7 +474,7 @@ fn redraw_containers(
     let opacity_change = if fade_effect.is_some()
       || is_popin
       || started_slides.contains(&window.id())
-      || arriving_ids.contains(&window.id())
+      || placed_first_ids.contains(&window.id())
     {
       OpacityChange::Hide
     } else if state.animation_manager.take_hidden(&window.id()) {
@@ -562,40 +583,43 @@ fn redraw_containers(
     }
   }
 
-  if switch.is_some() {
-    start_workspace_switch(arriving, focused_container, state, config);
+  // With a switch, the windows leaving start with those arriving.
+  if switch.is_some() || !placed_first.is_empty() {
+    start_placed_first(placed_first, focused_container, state, config);
   }
 
   Ok(())
 }
 
-/// Captures the windows arriving with a workspace switch (shown by now,
-/// at an opacity of 0), and starts the switch: every window leaving and
-/// arriving slides on the same frame.
+/// Captures the windows to animate once placed (shown by now, at an
+/// opacity of 0: windows arriving with a workspace switch, new windows
+/// growing in), and starts every prepared slide on the same frame, those
+/// of windows leaving with a switch included.
 ///
-/// A window arriving that can't slide gets its opacity back at once, so
-/// it's never left invisible.
+/// A window that can't animate gets its opacity back at once, so it's
+/// never left invisible.
 ///
 /// # Platform-specific
 ///
-/// - **macOS**: Never called; workspaces switch without animation.
+/// - **macOS**: Never called; workspaces switch and windows appear without
+///   these animations.
 // LINT: `focused_container` and `config` are only used on Windows.
 #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-fn start_workspace_switch(
-  arriving: Vec<SlideRequest>,
+fn start_placed_first(
+  requests: Vec<SlideRequest>,
   focused_container: &Container,
   state: &mut WmState,
   config: &UserConfig,
 ) {
   #[cfg(target_os = "windows")]
-  let arriving_windows = arriving
+  let windows = requests
     .iter()
     .map(|request| request.window.clone())
     .collect::<Vec<_>>();
 
   state
     .animation_manager
-    .prepare_slides(arriving, &state.dispatcher);
+    .prepare_slides(requests, &state.dispatcher);
 
   // LINT: Only read on Windows.
   #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
@@ -604,7 +628,7 @@ fn start_workspace_switch(
     .start_prepared_slides(&state.dispatcher);
 
   #[cfg(target_os = "windows")]
-  for window in arriving_windows {
+  for window in windows {
     if !started.contains(&window.id())
       && state.animation_manager.take_hidden(&window.id())
     {

@@ -110,6 +110,11 @@ pub struct AnimationNode {
   /// For `slidefade`: how far workspaces slide, in percent of the
   /// monitor (the rest is a fade).
   pub slide_percent: Option<f32>,
+
+  /// For `windows_in` with `popin`: grow the live window itself each
+  /// frame, rather than a snapshot of it. Choppier, but shows the app
+  /// drawing as it opens.
+  pub live: Option<bool>,
 }
 
 /// Duration and curve of an animation.
@@ -139,6 +144,10 @@ pub struct ResolvedEffect {
   /// for `slide` and `slidevert`, `slide_percent` for `slidefade`, `0.0`
   /// for `fade`).
   pub slide_fraction: f32,
+
+  /// For a window appearing with `popin`: whether the live window grows
+  /// rather than a snapshot of it.
+  pub live: bool,
 }
 
 /// The move animation's settings, with every inherited value filled in.
@@ -425,9 +434,19 @@ fn check_styles(
          workspaces."
       );
     } else if *key == "windows_out"
-      && !matches!(style, AnimationEffect::Fade | AnimationEffect::Popin)
+      && !matches!(
+        style,
+        AnimationEffect::Fade
+          | AnimationEffect::Popin
+          | AnimationEffect::Gnomed
+      )
     {
-      bail!("`animations.windows_out.style` must be 'fade' or 'popin'.");
+      bail!(
+        "`animations.windows_out.style` must be 'fade', 'popin' or \
+         'gnomed'."
+      );
+    } else if *key == "windows_move" && *style == AnimationEffect::Gnomed {
+      bail!("`animations.windows_move.style` can't be 'gnomed'.");
     }
   }
 
@@ -625,6 +644,7 @@ impl Resolver<'_> {
       fade,
       popin_scale: popin_percent / 100.0,
       slide_fraction,
+      live: self.setting(key, parent, |node| node.live).unwrap_or(false),
     }))
   }
 }
@@ -673,6 +693,8 @@ impl AnimationEffectConfig {
       popin_percent: None,
       trigger_threshold,
       slide_percent: None,
+      // The old `popin` grew the live window.
+      live: (self.effect_type == AnimationEffect::Popin).then_some(true),
     }
   }
 }
@@ -713,12 +735,22 @@ pub enum AnimationEffect {
   Move,
 
   /// A window appearing grows to its size from `popin_percent` while
-  /// fading in; one leaving shrinks to it while fading out.
+  /// fading in (a snapshot of it, or the live window with `live: true`);
+  /// one leaving shrinks to it while fading out.
   ///
   /// # Platform-specific
   ///
   /// - **macOS**: Not supported; the window moves without animation.
   Popin,
+
+  /// For windows appearing or leaving: a snapshot of the window unfolds
+  /// from a line across its middle, or folds into one, while fading (as
+  /// in GNOME and Hyprland's `gnomed`).
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Not supported; the window appears without animation.
+  Gnomed,
 
   /// For workspaces: like `slide`, but up and down.
   ///
@@ -969,6 +1001,23 @@ mod tests {
     error(r#"{ "workspaces": { "style": "popin" } }"#);
     error(r#"{ "windows_move": { "style": "slidevert" } }"#);
     error(r#"{ "workspaces": { "slide_percent": 120 } }"#);
+  }
+
+  #[test]
+  fn popin_is_a_snapshot_unless_live() {
+    let snapshot = ok(r#"{ "windows_in": { "style": "popin" } }"#);
+    assert!(!snapshot.open_effect().expect("open").live);
+
+    let live =
+      ok(r#"{ "windows_in": { "style": "popin", "live": true } }"#);
+    assert!(live.open_effect().expect("open").live);
+
+    // The old key's popin grew the live window, and still does.
+    let old = ok(r#"{ "window_open": { "effect_type": "popin" } }"#);
+    assert!(old.open_effect().expect("open").live);
+
+    ok(r#"{ "windows_out": { "style": "gnomed" } }"#);
+    error(r#"{ "windows_move": { "style": "gnomed" } }"#);
   }
 
   #[test]

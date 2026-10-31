@@ -235,7 +235,7 @@ pub struct OverlayAnimation {
   /// The snapshot's opacity; left as it is if `None`.
   pub opacity: Option<AnimatedValue<OpacityValue>>,
 
-  /// Scale of the whole snapshot about the rect's center (`1.0` is its
-  /// own size); `1.0` if `None`.
-  pub scale: Option<AnimatedValue<f32>>,
+  /// Scale of the whole snapshot about the rect's center, across and
+  /// down (`1.0` is its own size); `1.0` if `None`.
+  pub scale: Option<AnimatedValue<(f32, f32)>>,
 }

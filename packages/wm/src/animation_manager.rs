@@ -37,7 +37,12 @@ pub fn hides_new_windows(config: &UserConfig) -> bool {
   config.value.general.hide_method == wm_common::HideMethod::Cloak
     && wm_platform::system_animations_enabled()
     && config.value.animations.open_effect().is_some_and(|open| {
-      matches!(open.style, AnimationEffect::Fade | AnimationEffect::Popin)
+      matches!(
+        open.style,
+        AnimationEffect::Fade
+          | AnimationEffect::Popin
+          | AnimationEffect::Gnomed
+      )
     })
 }
 
@@ -77,7 +82,29 @@ pub enum AnimationPlan {
   /// The real window itself moves to the new position a little each
   /// frame. With `popin`, it grows there from smaller while fading in.
   Live { effect: ResolvedEffect, popin: bool },
+
+  /// A snapshot of a new window grows (`popin`) or unfolds (`gnomed`) in
+  /// at its place while fading in, while the real window waits
+  /// invisible beneath it.
+  SnapshotIn(ResolvedEffect),
 }
+
+/// Scale of a snapshot, across and down, from and to.
+pub type ScaleChange = ((f32, f32), (f32, f32));
+
+/// Scale a snapshot appearing with `effect` starts at (or one leaving
+/// ends at): smaller for `popin`, a line across its middle for `gnomed`,
+/// its own size otherwise.
+pub fn entrance_scale(effect: &ResolvedEffect) -> (f32, f32) {
+  match effect.style {
+    AnimationEffect::Popin => (effect.popin_scale, effect.popin_scale),
+    AnimationEffect::Gnomed => (1.0, GNOMED_SCALE),
+    _ => (1.0, 1.0),
+  }
+}
+
+/// Height a `gnomed` snapshot folds to, relative to its own: a line.
+const GNOMED_SCALE: f32 = 0.01;
 
 /// A window to start a live animation for.
 // LINT: Live animations are only started on Windows.
@@ -115,6 +142,12 @@ pub struct SlideRequest {
   /// Opacity of the snapshot, from and to; opaque if `None`. A window
   /// already sliding starts from the opacity it has.
   pub opacity: Option<(f32, f32)>,
+
+  /// Timing of the opacity change; the slide's own if `None`.
+  pub fade: Option<AnimationTiming>,
+
+  /// Scale of the snapshot about its center; its own size if `None`.
+  pub scale: Option<ScaleChange>,
 }
 
 impl SlideRequest {
@@ -133,6 +166,8 @@ impl SlideRequest {
       start_rect: None,
       bounds: None,
       opacity: None,
+      fade: None,
+      scale: None,
     }
   }
 }
@@ -149,6 +184,10 @@ struct PreparedSlide {
   target_rect: Rect,
   bounds: Option<Rect>,
   opacity: Option<(f32, f32)>,
+
+  /// Clock of the opacity change, if it has its own timing.
+  fade_clock: Option<AnimationClock>,
+  scale: Option<ScaleChange>,
 }
 
 /// Timing shared by every kind of animation.
@@ -246,6 +285,12 @@ struct SlideState {
 
   /// Opacity of the snapshot, from and to, if it changes.
   opacity: Option<(f32, f32)>,
+
+  /// Timing of the opacity change.
+  opacity_clock: AnimationClock,
+
+  /// Scale of the snapshot, if it changes.
+  scale: Option<ScaleChange>,
 }
 
 impl SlideState {
@@ -259,9 +304,31 @@ impl SlideState {
   /// Returns the snapshot's opacity at `at`, if it changes.
   fn opacity_at(&self, at: Instant) -> Option<f32> {
     self.opacity.map(|(from, to)| {
-      (from + (to - from) * self.clock.eased_progress_at(at))
+      (from + (to - from) * self.opacity_clock.eased_progress_at(at))
         .clamp(0.0, 1.0)
     })
+  }
+
+  /// Returns the snapshot's scale at `at`, if it changes.
+  fn scale_at(&self, at: Instant) -> Option<(f32, f32)> {
+    self.scale.map(|((from_x, from_y), (to_x, to_y))| {
+      let progress = self.clock.eased_progress_at(at);
+
+      (
+        (from_x + (to_x - from_x) * progress).max(GNOMED_SCALE),
+        (from_y + (to_y - from_y) * progress).max(GNOMED_SCALE),
+      )
+    })
+  }
+
+  /// Whether both the motion and the opacity change are over.
+  fn is_complete(&self) -> bool {
+    self.clock.is_complete() && self.opacity_clock.is_complete()
+  }
+
+  /// When both the motion and the opacity change are over.
+  fn end_time(&self) -> Instant {
+    self.clock.end_time().max(self.opacity_clock.end_time())
   }
 
   /// Returns the interpolated rect at `at`.
@@ -354,8 +421,9 @@ struct CloseState {
   /// Where the window was when it was closed.
   rect: Rect,
 
-  /// Scale the snapshot ends at (1.0: fade only).
-  end_scale: f32,
+  /// Scale the snapshot ends at, across and down (`(1.0, 1.0)`: fade
+  /// only).
+  end_scale: (f32, f32),
 }
 
 // LINT: Close animations are only started on Windows.
@@ -519,7 +587,7 @@ impl AnimationManager {
     self
       .slides
       .iter()
-      .filter(|(_, slide)| slide.clock.is_complete())
+      .filter(|(_, slide)| slide.is_complete())
       .map(|(id, _)| *id)
       .chain(
         self
@@ -592,7 +660,7 @@ impl AnimationManager {
     let finished_slide = self
       .slides
       .get(window_id)
-      .is_some_and(|slide| slide.clock.is_complete());
+      .is_some_and(SlideState::is_complete);
 
     #[cfg(target_os = "windows")]
     if finished_slide {
@@ -761,8 +829,8 @@ impl AnimationManager {
     self
       .slides
       .values()
-      .filter(|slide| !slide.clock.is_complete())
-      .map(|slide| slide.clock.end_time())
+      .filter(|slide| !slide.is_complete())
+      .map(SlideState::end_time)
       .chain(
         self
           .closes
@@ -899,6 +967,15 @@ impl AnimationManager {
       // Live animations move the real window, which is only done on
       // Windows. A window already moving keeps moving to its new target,
       // and one mid-slide finishes its slide.
+      // A new window's snapshot grows or unfolds in, unless the live
+      // window should grow.
+      AnimationEffect::Popin | AnimationEffect::Gnomed
+        if cfg!(target_os = "windows")
+          && matches!(trigger, AnimationTrigger::WindowOpened)
+          && !effect.live =>
+      {
+        Some(AnimationPlan::SnapshotIn(effect.clone()))
+      }
       AnimationEffect::Move | AnimationEffect::Popin
         if cfg!(target_os = "windows") =>
       {
@@ -917,6 +994,7 @@ impl AnimationManager {
       AnimationEffect::Fade
       | AnimationEffect::Move
       | AnimationEffect::Popin
+      | AnimationEffect::Gnomed
       | AnimationEffect::SlideVert
       | AnimationEffect::SlideFade => None,
     }
@@ -1064,11 +1142,7 @@ impl AnimationManager {
       clock: AnimationClock::new(&effect.timing, frame_rate),
       fade_clock: AnimationClock::for_fade(effect, frame_rate),
       rect,
-      end_scale: if effect.style == AnimationEffect::Popin {
-        effect.popin_scale
-      } else {
-        1.0
-      },
+      end_scale: entrance_scale(effect),
     };
 
     state.clock.start_time = start_at;
@@ -1086,7 +1160,7 @@ impl AnimationManager {
         curve: state.fade_clock.curve(),
       }),
       scale: Some(AnimatedValue {
-        from: 1.0,
+        from: (1.0, 1.0),
         to: state.end_scale,
         curve: state.clock.curve(),
       }),
@@ -1178,6 +1252,11 @@ impl AnimationManager {
         target_rect: request.target_rect,
         bounds: request.bounds,
         opacity: request.opacity,
+        fade_clock: request
+          .fade
+          .as_ref()
+          .map(|fade| AnimationClock::new(fade, request.frame_rate)),
+        scale: request.scale,
         window: request.window,
       };
 
@@ -1286,6 +1365,17 @@ impl AnimationManager {
         (opacity, None) => opacity,
       };
 
+      // And from its scale.
+      let scale = match (slide.scale, running) {
+        (Some((from, to)), Some(running)) => {
+          Some((running.scale_at(start_at).unwrap_or(from), to))
+        }
+        (None, Some(running)) => {
+          running.scale_at(start_at).map(|scale| (scale, (1.0, 1.0)))
+        }
+        (scale, None) => scale,
+      };
+
       let outer_rect = self.outer_rect(
         &slide.window,
         &start_rect,
@@ -1309,6 +1399,10 @@ impl AnimationManager {
 
       slide.clock.start_time = start_at;
 
+      let mut opacity_clock =
+        slide.fade_clock.unwrap_or_else(|| slide.clock.clone());
+      opacity_clock.start_time = start_at;
+
       self.slides.insert(
         window_id,
         SlideState {
@@ -1316,6 +1410,8 @@ impl AnimationManager {
           start_rect,
           target_rect: slide.target_rect,
           opacity,
+          opacity_clock,
+          scale,
         },
       );
 
@@ -1364,9 +1460,13 @@ impl AnimationManager {
                 opacity: slide.opacity.map(|(from, to)| AnimatedValue {
                   from: OpacityValue(from),
                   to: OpacityValue(to),
+                  curve: slide.opacity_clock.curve(),
+                }),
+                scale: slide.scale.map(|(from, to)| AnimatedValue {
+                  from,
+                  to,
                   curve: slide.clock.curve(),
                 }),
-                scale: None,
               })?;
 
               #[cfg(not(target_os = "windows"))]
@@ -1669,6 +1769,7 @@ mod tests {
       fade: None,
       popin_scale: 0.9,
       slide_fraction: 1.0,
+      live: false,
     };
 
     assert!(AnimationClock::for_fade(&effect, 60).is_complete());
@@ -1681,6 +1782,8 @@ mod tests {
       start_rect: Rect::from_xy(0, 0, 100, 100),
       target_rect: Rect::from_xy(200, 50, 300, 400),
       opacity: None,
+      opacity_clock: clock(0, 0),
+      scale: None,
     };
 
     assert_eq!(slide.current_rect(), slide.target_rect);
@@ -1693,6 +1796,8 @@ mod tests {
       start_rect: Rect::from_xy(0, 0, 100, 100),
       target_rect: Rect::from_xy(500, 0, 100, 100),
       opacity: None,
+      opacity_clock: clock(0, 0),
+      scale: None,
     };
 
     // Starts on a frame 16 ms from now.
@@ -1723,6 +1828,8 @@ mod tests {
         start_rect: Rect::from_xy(0, 0, 20, 20),
         target_rect: Rect::from_xy(0, 0, 400, 400),
         opacity: None,
+        opacity_clock: clock(0, 0),
+        scale: None,
       };
 
       let rect = slide.current_rect();
@@ -1731,7 +1838,7 @@ mod tests {
   }
 
   /// A close animation `elapsed_ms` into 160 ms, ending at `end_scale`.
-  fn close(elapsed_ms: u64, end_scale: f32) -> CloseState {
+  fn close(elapsed_ms: u64, end_scale: (f32, f32)) -> CloseState {
     CloseState {
       clock: clock(elapsed_ms, 160),
       fade_clock: clock(elapsed_ms, 160),
@@ -1742,8 +1849,8 @@ mod tests {
 
   #[test]
   fn close_ends_with_its_longer_clock() {
-    assert!(close(500, 0.95).is_complete());
-    assert!(!close(80, 0.95).is_complete());
+    assert!(close(500, (0.95, 0.95)).is_complete());
+    assert!(!close(80, (0.95, 0.95)).is_complete());
   }
 
   #[test]
@@ -1752,7 +1859,7 @@ mod tests {
       clock: clock(100, 80),
       fade_clock: clock(100, 300),
       rect: Rect::from_xy(0, 0, 100, 100),
-      end_scale: 0.95,
+      end_scale: (0.95, 0.95),
     };
 
     assert!(!closing.is_complete());

@@ -538,8 +538,8 @@ impl AnimationWindow {
       }
 
       let scale = animation.scale.clone().unwrap_or(AnimatedValue {
-        from: 1.0,
-        to: 1.0,
+        from: (1.0, 1.0),
+        to: (1.0, 1.0),
         curve: animation.rect.curve.clone(),
       });
 
@@ -620,26 +620,26 @@ impl AnimationWindow {
     Ok(())
   }
 
-  /// Animates the scale of the whole snapshot, about the center of `rect`
-  /// (where it ends).
+  /// Animates the scale of the whole snapshot, across and down, about the
+  /// center of `rect` (where it ends).
   #[allow(clippy::cast_precision_loss)]
   fn animate_scale(
     &self,
     device: &IDCompositionDesktopDevice,
-    scale: &AnimatedValue<f32>,
+    scale: &AnimatedValue<(f32, f32)>,
     rect: &Rect,
   ) -> crate::Result<()> {
     let scale_x = Channel::new(
       device,
-      scale.from,
-      scale.to,
+      scale.from.0,
+      scale.to.0,
       &scale.curve,
       SCALE_ERROR,
     )?;
     let scale_y = Channel::new(
       device,
-      scale.from,
-      scale.to,
+      scale.from.1,
+      scale.to.1,
       &scale.curve,
       SCALE_ERROR,
     )?;
