@@ -192,6 +192,9 @@ async fn start_wm(
     .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
   loop {
+    // When the next animation the compositor plays on its own is over.
+    let animation_deadline = wm.state.animation_manager.next_deadline();
+
     let res = tokio::select! {
       _ = signal::ctrl_c() => {
         tracing::info!("Received SIGINT signal.");
@@ -229,7 +232,15 @@ async fn start_wm(
         }
       },
       Some(()) = wm.state.animation_manager.tick_rx.recv() => {
+        // Ticks that piled up while the WM was busy are one frame late
+        // already; one update catches up with all of them.
+        while wm.state.animation_manager.tick_rx.try_recv().is_ok() {}
         wm.update_animations(&config)
+      },
+      () = tokio::time::sleep_until(tokio::time::Instant::from_std(
+        animation_deadline.unwrap_or_else(std::time::Instant::now),
+      )), if animation_deadline.is_some() => {
+        wm.end_finished_animations(&config)
       },
       () = tokio::time::sleep_until(tokio::time::Instant::from_std(
         wm.state.settle_deadline.unwrap_or_else(std::time::Instant::now),

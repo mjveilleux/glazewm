@@ -3,6 +3,7 @@ use std::{
   time::{Duration, Instant},
 };
 
+#[cfg(not(target_os = "windows"))]
 use anyhow::Context;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -11,9 +12,12 @@ use wm_common::{AnimationEffect, AnimationTiming, ResolvedEffect};
 use wm_platform::DispatcherExtMacOs;
 #[cfg(target_os = "windows")]
 use wm_platform::NativeWindowWindowsExt;
+#[cfg(target_os = "windows")]
+use wm_platform::{AnimatedValue, OverlayAnimation};
 use wm_platform::{
-  AnimationContext, AnimationWindow, AnimationWindowRequest, Dispatcher,
-  Easing, NativeWindow, OpacityValue, Rect,
+  AnimationContext, AnimationCurve, AnimationWindow,
+  AnimationWindowRequest, Dispatcher, Easing, NativeWindow, OpacityValue,
+  Rect,
 };
 
 use crate::{
@@ -128,7 +132,14 @@ impl AnimationClock {
 
   /// Returns the normalized animation progress in `[0.0, 1.0]`.
   fn progress(&self) -> f32 {
-    let elapsed = self.start_time.elapsed();
+    self.progress_at(Instant::now())
+  }
+
+  /// Returns the normalized progress at `at`: 0 until the animation
+  /// starts (it may start in the future, on the compositor's next frame),
+  /// 1 once it's over.
+  fn progress_at(&self, at: Instant) -> f32 {
+    let elapsed = at.saturating_duration_since(self.start_time);
 
     if elapsed >= self.duration {
       1.0
@@ -140,7 +151,27 @@ impl AnimationClock {
   /// Returns the eased animation progress: 0 at the start, 1 at the end,
   /// and with an overshooting curve, outside [0, 1] in between.
   fn eased_progress(&self) -> f32 {
-    self.easing.apply(self.progress())
+    self.eased_progress_at(Instant::now())
+  }
+
+  /// Returns the eased progress at `at` (see `eased_progress`).
+  fn eased_progress_at(&self, at: Instant) -> f32 {
+    self.easing.apply(self.progress_at(at))
+  }
+
+  /// When the animation ends.
+  fn end_time(&self) -> Instant {
+    self.start_time + self.duration
+  }
+
+  /// The clock's duration and curve, for the compositor to play.
+  // LINT: Only the compositor-driven platform uses it.
+  #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+  fn curve(&self) -> AnimationCurve {
+    AnimationCurve {
+      duration: self.duration,
+      easing: self.easing.clone(),
+    }
   }
 
   /// Whether the animation has completed.
@@ -163,11 +194,18 @@ struct SlideState {
 
 impl SlideState {
   /// Returns the interpolated rect at the current animation progress.
+  // LINT: Only ticked slides (off Windows) are drawn from it.
+  #[cfg_attr(target_os = "windows", allow(dead_code))]
   fn current_rect(&self) -> Rect {
+    self.rect_at(Instant::now())
+  }
+
+  /// Returns the interpolated rect at `at`.
+  fn rect_at(&self, at: Instant) -> Rect {
     at_least_one_pixel(
       &self
         .start_rect
-        .interpolate(&self.target_rect, self.clock.eased_progress()),
+        .interpolate(&self.target_rect, self.clock.eased_progress_at(at)),
     )
   }
 }
@@ -259,19 +297,6 @@ struct CloseState {
 // LINT: Close animations are only started on Windows.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 impl CloseState {
-  /// Returns the snapshot's opacity and scale at the current progress.
-  fn current(&self) -> (OpacityValue, f32) {
-    let progress = self.clock.eased_progress();
-
-    (
-      OpacityValue(1.0)
-        .interpolate(&OpacityValue(0.0), self.fade_clock.eased_progress()),
-      // An overshooting curve may pass the end scale, but never flips the
-      // picture.
-      (1.0 + (self.end_scale - 1.0) * progress).max(0.01),
-    )
-  }
-
   /// Whether both the shrink and the fade are over.
   fn is_complete(&self) -> bool {
     self.clock.is_complete() && self.fade_clock.is_complete()
@@ -321,10 +346,17 @@ pub struct AnimationManager {
   context: Option<AnimationContext>,
 
   /// Handle to the running tick task, if any.
+  #[cfg(not(target_os = "windows"))]
   tick_task: Option<tokio::task::JoinHandle<()>>,
 
   /// Frame rate of the running tick task, if any.
+  #[cfg(not(target_os = "windows"))]
   tick_frame_rate: Option<u32>,
+
+  /// Stop flag of the thread sending a tick per compositor frame, while
+  /// it runs.
+  #[cfg(target_os = "windows")]
+  pacer: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 
   /// Frame timing of the running animations.
   stats: AnimationStats,
@@ -352,8 +384,12 @@ impl AnimationManager {
       windows: HashMap::new(),
       closes: Vec::new(),
       context: None,
+      #[cfg(not(target_os = "windows"))]
       tick_task: None,
+      #[cfg(not(target_os = "windows"))]
       tick_frame_rate: None,
+      #[cfg(target_os = "windows")]
+      pacer: None,
       stats: AnimationStats::default(),
       #[cfg(target_os = "macos")]
       displays_have_separate_spaces: dispatcher
@@ -440,7 +476,7 @@ impl AnimationManager {
 
     if !completed.is_empty() {
       self.fades.retain(|id, _| !completed.contains(id));
-      self.update_tick_rate();
+      self.update_ticking();
     }
 
     completed
@@ -456,7 +492,7 @@ impl AnimationManager {
     let had_live = self.lives.remove(window_id).is_some();
 
     if had_fade || had_slide || had_live {
-      self.update_tick_rate();
+      self.update_ticking();
     }
 
     if let Some(anim_window) = self.windows.remove(window_id) {
@@ -489,9 +525,16 @@ impl AnimationManager {
     }
   }
 
-  /// Updates all active animations during a single tick.
+  /// Updates the animations that change every frame, during a tick.
   ///
-  /// Slide updates get batched into a single compositor transaction.
+  /// On Windows, those are the ones moving or fading real windows: the
+  /// compositor plays slides and closes on its own. Elsewhere, slides too,
+  /// batched into a single compositor transaction.
+  // LINT: `dispatcher` and the result are only used off Windows.
+  #[cfg_attr(
+    target_os = "windows",
+    allow(unused_variables, clippy::unnecessary_wraps)
+  )]
   pub fn tick_update(
     &mut self,
     dispatcher: &Dispatcher,
@@ -524,47 +567,68 @@ impl AnimationManager {
       }
     }
 
-    if self.slides.is_empty() && self.closes.is_empty() {
-      return Ok(());
-    }
-
-    let result = self
-      .context
-      .as_ref()
-      .context("Animation context not initialized.")?
-      .transaction(
-        || {
-          for (id, slide) in &self.slides {
-            if !slide.clock.is_complete() {
-              if let Some(anim_window) = self.windows.get(id) {
-                anim_window.update(&slide.current_rect(), None)?;
+    #[cfg(not(target_os = "windows"))]
+    if !self.slides.is_empty() {
+      self
+        .context
+        .as_ref()
+        .context("Animation context not initialized.")?
+        .transaction(
+          || {
+            for (id, slide) in &self.slides {
+              if !slide.clock.is_complete() {
+                if let Some(anim_window) = self.windows.get(id) {
+                  anim_window.update(&slide.current_rect(), None)?;
+                }
               }
             }
-          }
 
-          #[cfg(target_os = "windows")]
-          for closing in &self.closes {
-            let (opacity, scale) = closing.state.current();
-            closing.overlay.update_scaled(
-              &closing.state.rect,
-              Some(&opacity),
-              scale,
-            )?;
-          }
+            anyhow::Ok(())
+          },
+          dispatcher,
+        )??;
+    }
 
-          anyhow::Ok(())
-        },
-        dispatcher,
-      )?;
+    Ok(())
+  }
 
-    self.end_completed_closes();
+  /// When the next animation the compositor plays on its own ends, if
+  /// any is running: the WM wakes then to end it, instead of every frame.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Always `None`; every animation is ticked.
+  pub fn next_deadline(&self) -> Option<Instant> {
+    if !cfg!(target_os = "windows") {
+      return None;
+    }
 
-    result
+    // Finished ones aren't counted: a slide left at its end (while a
+    // settle holds syncs back) would otherwise wake the WM nonstop.
+    self
+      .slides
+      .values()
+      .filter(|slide| !slide.clock.is_complete())
+      .map(|slide| slide.clock.end_time())
+      .chain(
+        self
+          .closes
+          .iter()
+          .filter(|closing| !closing.state.is_complete())
+          .map(|closing| {
+            closing
+              .state
+              .clock
+              .end_time()
+              .max(closing.state.fade_clock.end_time())
+          }),
+      )
+      .min()
   }
 
   /// Removes close animations that have completed and destroys their
   /// overlays.
-  fn end_completed_closes(&mut self) {
+  pub fn end_completed_closes(&mut self) {
     if !self
       .closes
       .iter()
@@ -580,8 +644,8 @@ impl AnimationManager {
     self.closes = running;
 
     for closing in done {
-      // On a thread of its own, as in `cancel_animation`, so the tick
-      // never waits on the teardown.
+      // On a thread of its own, as in `cancel_animation`, so the WM never
+      // waits on the teardown.
       std::thread::spawn(move || {
         if let Err(err) = closing.overlay.destroy() {
           tracing::warn!(
@@ -591,7 +655,7 @@ impl AnimationManager {
       });
     }
 
-    self.update_tick_rate();
+    self.update_ticking();
   }
 
   /// Returns how the window should animate to `target_rect`, or `None` if
@@ -745,7 +809,7 @@ impl AnimationManager {
     );
 
     self.stats.animation_started(request.frame_rate);
-    self.update_tick_rate();
+    self.update_ticking();
   }
 
   /// Creates the shared GPU context on first use.
@@ -827,39 +891,83 @@ impl AnimationManager {
       None => None,
     };
 
-    match overlay {
-      Some(Ok(overlay)) => {
-        // The snapshot is the window's exit; the system's own close
-        // transition would play over it. If the app keeps the window
-        // open, it only loses the system's minimize animation.
-        if let Err(err) = native.set_transitions_disabled(true) {
-          tracing::debug!("Failed to disable system transitions: {err}");
-        }
-
-        self.closes.push(Closing {
-          state: CloseState {
-            // Started once the snapshot is up, so its capture doesn't eat
-            // into the animation.
-            clock: AnimationClock::new(&effect.timing, frame_rate),
-            fade_clock: AnimationClock::for_fade(effect, frame_rate),
-            rect,
-            end_scale: if effect.style == AnimationEffect::Popin {
-              effect.popin_scale
-            } else {
-              1.0
-            },
-          },
-          overlay,
-        });
-
-        self.stats.animation_started(frame_rate);
-        self.update_tick_rate();
-      }
+    let overlay = match overlay {
+      Some(Ok(overlay)) => overlay,
       Some(Err(err)) => {
         tracing::warn!("Failed to create close animation window: {err}");
+        return;
       }
-      None => {}
+      None => return,
+    };
+
+    // Started once the snapshot is up, so its capture doesn't eat into the
+    // animation.
+    let start_at = self.next_frame_time(dispatcher);
+
+    let mut state = CloseState {
+      clock: AnimationClock::new(&effect.timing, frame_rate),
+      fade_clock: AnimationClock::for_fade(effect, frame_rate),
+      rect,
+      end_scale: if effect.style == AnimationEffect::Popin {
+        effect.popin_scale
+      } else {
+        1.0
+      },
+    };
+
+    state.clock.start_time = start_at;
+    state.fade_clock.start_time = start_at;
+
+    let animation = OverlayAnimation {
+      rect: AnimatedValue {
+        from: state.rect.clone(),
+        to: state.rect.clone(),
+        curve: state.clock.curve(),
+      },
+      opacity: Some(AnimatedValue {
+        from: OpacityValue(1.0),
+        to: OpacityValue(0.0),
+        curve: state.fade_clock.curve(),
+      }),
+      scale: Some(AnimatedValue {
+        from: 1.0,
+        to: state.end_scale,
+        curve: state.clock.curve(),
+      }),
+    };
+
+    let result = match &self.context {
+      Some(context) => context
+        .transaction(|| overlay.animate(&animation), dispatcher)
+        .and_then(|result| result),
+      None => return,
+    };
+
+    if let Err(err) = result {
+      tracing::warn!("Failed to start close animation: {err}");
+
+      std::thread::spawn(move || {
+        if let Err(err) = overlay.destroy() {
+          tracing::warn!(
+            "Failed to destroy close animation window: {err}"
+          );
+        }
+      });
+
+      return;
     }
+
+    // The snapshot is the window's exit; the system's own close transition
+    // would play over it. If the app keeps the window open, it only loses
+    // the system's minimize animation.
+    if let Err(err) = native.set_transitions_disabled(true) {
+      tracing::debug!("Failed to disable system transitions: {err}");
+    }
+
+    self.closes.push(Closing { state, overlay });
+    self.stats.animation_started(frame_rate);
+    self.stats.first_frame_at(start_at);
+    self.update_ticking();
   }
 
   /// Starts or extends slide animations for several windows at once.
@@ -876,14 +984,15 @@ impl AnimationManager {
   ) -> HashSet<Uuid> {
     let mut started = HashSet::new();
 
-    if requests.is_empty() {
+    if requests.is_empty() || !self.ensure_context(dispatcher) {
       return started;
     }
 
-    if !self.ensure_context(dispatcher) {
-      return started;
-    }
+    // A slide already running turns towards its new target from where it
+    // is when the change shows: on the compositor's next frame.
+    let retarget_at = self.next_frame_time(dispatcher);
 
+    let mut retargeted = Vec::new();
     let mut new_slides = Vec::new();
 
     for request in requests {
@@ -895,10 +1004,10 @@ impl AnimationManager {
 
       let start_rect = self.slides.get(&window_id).map_or_else(
         || request.window.native_properties().frame.clone(),
-        SlideState::current_rect,
+        |slide| slide.rect_at(retarget_at),
       );
 
-      let slide = SlideState {
+      let mut slide = SlideState {
         clock: AnimationClock::new(
           &request.effect.timing,
           request.frame_rate,
@@ -910,27 +1019,23 @@ impl AnimationManager {
       let outer_rect =
         self.outer_rect(&request.window, &slide, dispatcher);
 
-      if self.windows.contains_key(&window_id) {
-        match self.retarget_slide(
-          &window_id,
-          &slide,
-          &outer_rect,
-          dispatcher,
-        ) {
+      match self.windows.get_mut(&window_id) {
+        Some(overlay) => match overlay.resize(&outer_rect) {
           Ok(()) => {
-            self.stats.animation_started(slide.clock.frame_rate);
+            slide.clock.start_time = retarget_at;
             self.slides.insert(window_id, slide);
-            started.insert(window_id);
+            retargeted.push(window_id);
           }
           Err(err) => {
             tracing::warn!("Failed to retarget slide animation: {err}");
             self.cancel_animation(&window_id);
           }
-        }
-      } else {
-        new_slides.push((request.window, slide, outer_rect));
+        },
+        None => new_slides.push((request.window, slide, outer_rect)),
       }
     }
+
+    started.extend(self.draw_slides(&retargeted, retarget_at, dispatcher));
 
     if !new_slides.is_empty() {
       let overlays = {
@@ -960,29 +1065,129 @@ impl AnimationManager {
         }
       };
 
+      // Started once the overlays are up, so captures don't eat into the
+      // animation.
+      let start_at = self.next_frame_time(dispatcher);
+      let mut created = Vec::new();
+
       for ((window, mut slide, _), overlay) in
         new_slides.into_iter().zip(overlays)
       {
         match overlay {
           Ok(overlay) => {
-            // Start the clock once the overlay is up, so captures don't
-            // eat into the animation.
-            slide.clock.start_time = Instant::now();
-            self.stats.animation_started(slide.clock.frame_rate);
+            slide.clock.start_time = start_at;
             self.windows.insert(window.id(), overlay);
             self.slides.insert(window.id(), slide);
-            started.insert(window.id());
+            created.push(window.id());
           }
           Err(err) => {
             tracing::warn!("Failed to create animation window: {err}");
           }
         }
       }
+
+      started.extend(self.draw_slides(&created, start_at, dispatcher));
     }
 
-    self.update_tick_rate();
+    self.update_ticking();
 
     started
+  }
+
+  /// Draws the slides of the given windows, in one compositor
+  /// transaction: on Windows, hands each slide to the compositor to play;
+  /// elsewhere, draws its first frame. Slides that fail are cancelled.
+  ///
+  /// Returns the IDs of the slides now running.
+  fn draw_slides(
+    &mut self,
+    window_ids: &[Uuid],
+    start_at: Instant,
+    dispatcher: &Dispatcher,
+  ) -> Vec<Uuid> {
+    if window_ids.is_empty() {
+      return Vec::new();
+    }
+
+    let result = match &self.context {
+      Some(context) => context
+        .transaction(
+          || {
+            for id in window_ids {
+              let (Some(overlay), Some(slide)) =
+                (self.windows.get(id), self.slides.get(id))
+              else {
+                continue;
+              };
+
+              #[cfg(target_os = "windows")]
+              overlay.animate(&OverlayAnimation {
+                rect: AnimatedValue {
+                  from: slide.start_rect.clone(),
+                  to: slide.target_rect.clone(),
+                  curve: slide.clock.curve(),
+                },
+                opacity: None,
+                scale: None,
+              })?;
+
+              #[cfg(not(target_os = "windows"))]
+              overlay.update(&slide.current_rect(), None)?;
+            }
+
+            anyhow::Ok(())
+          },
+          dispatcher,
+        )
+        .map_err(anyhow::Error::from)
+        .and_then(|result| result),
+      None => Err(anyhow::anyhow!("Animation context not initialized.")),
+    };
+
+    if let Err(err) = result {
+      tracing::warn!("Failed to start slide animations: {err}");
+
+      for id in window_ids {
+        self.cancel_animation(id);
+      }
+
+      return Vec::new();
+    }
+
+    for id in window_ids {
+      if let Some(slide) = self.slides.get(id) {
+        self.stats.animation_started(slide.clock.frame_rate);
+      }
+    }
+
+    self.stats.first_frame_at(start_at);
+
+    window_ids.to_vec()
+  }
+
+  /// Estimates when the compositor shows its next frame, where an
+  /// animation committed now starts.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Now; animations are ticked from when they start.
+  // LINT: `self` and `dispatcher` are only used on Windows.
+  #[cfg_attr(
+    not(target_os = "windows"),
+    allow(unused_variables, clippy::unused_self)
+  )]
+  fn next_frame_time(&self, dispatcher: &Dispatcher) -> Instant {
+    #[cfg(target_os = "windows")]
+    if let Some(context) = &self.context {
+      match context.next_frame_time(dispatcher) {
+        Ok(time) => return time,
+        Err(err) => {
+          tracing::debug!("Failed to read the compositor's clock: {err}");
+        }
+      }
+    }
+
+    Instant::now()
   }
 
   /// Starts fading in a window that has just been hidden at its target
@@ -1004,7 +1209,7 @@ impl AnimationManager {
     );
 
     self.stats.animation_started(frame_rate);
-    self.update_tick_rate();
+    self.update_ticking();
   }
 
   /// Gets the bounds of the overlay for a slide: the union of its start
@@ -1040,44 +1245,90 @@ impl AnimationManager {
     outer_rect
   }
 
-  /// Resizes an existing overlay to the bounds of a new slide, keeping its
-  /// screenshot and z-order.
-  fn retarget_slide(
-    &mut self,
-    window_id: &Uuid,
-    slide: &SlideState,
-    outer_rect: &Rect,
-    dispatcher: &Dispatcher,
-  ) -> anyhow::Result<()> {
-    let anim_window = self
-      .windows
-      .get_mut(window_id)
-      .context("No animation window.")?;
+  /// Whether no animation is running.
+  fn is_idle(&self) -> bool {
+    self.slides.is_empty()
+      && self.fades.is_empty()
+      && self.lives.is_empty()
+      && self.closes.is_empty()
+  }
 
-    anim_window.resize(outer_rect)?;
+  /// Starts or stops the ticks for animations that change every frame,
+  /// and logs the timing of a run of animations once it's over.
+  ///
+  /// Called on animation start and completion.
+  fn update_ticking(&mut self) {
+    if self.is_idle() {
+      self.stats.idle();
+    }
 
-    // Immediately redraw the animation after resizing. It's positioned
-    // relative to the overlay's frame, so it would otherwise be incorrect
-    // until the next tick.
-    let anim_window = &*anim_window;
-    self
-      .context
-      .as_ref()
-      .context("Animation context not initialized.")?
-      .transaction(
-        || anim_window.update(&slide.current_rect(), None),
-        dispatcher,
-      )??;
+    #[cfg(target_os = "windows")]
+    self.set_paced_ticks(!self.fades.is_empty() || !self.lives.is_empty());
 
-    Ok(())
+    #[cfg(not(target_os = "windows"))]
+    self.update_tick_rate();
+  }
+
+  /// Starts or stops the thread that sends a tick per compositor frame,
+  /// for animations of real windows.
+  ///
+  /// Paced by the compositor (`DwmFlush`), so each tick lands right
+  /// after a frame is shown, rather than on a timer drifting against the
+  /// display.
+  #[cfg(target_os = "windows")]
+  fn set_paced_ticks(&mut self, on: bool) {
+    use std::sync::{
+      atomic::{AtomicBool, Ordering},
+      Arc,
+    };
+
+    if !on {
+      if let Some(stop) = self.pacer.take() {
+        stop.store(true, Ordering::Relaxed);
+      }
+
+      return;
+    }
+
+    if self.pacer.is_some() {
+      return;
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = stop.clone();
+    let tick_tx = self.tick_tx.clone();
+
+    let spawned = std::thread::Builder::new()
+      .name("animation-pacer".to_string())
+      .spawn(move || {
+        while !thread_stop.load(Ordering::Relaxed) {
+          if let Err(err) = wm_platform::wait_for_compositor_frame() {
+            // Without a compositor clock, tick at about 60 Hz.
+            tracing::debug!(
+              "Failed to wait for a compositor frame: {err}"
+            );
+            std::thread::sleep(Duration::from_millis(16));
+          }
+
+          if thread_stop.load(Ordering::Relaxed)
+            || tick_tx.send(()).is_err()
+          {
+            break;
+          }
+        }
+      });
+
+    match spawned {
+      Ok(_) => self.pacer = Some(stop),
+      Err(err) => tracing::warn!("Failed to start animation pacer: {err}"),
+    }
   }
 
   /// Spawns a task for emitting ticks at the target frame rate.
   ///
   /// Cancels the existing tick task if the frame rate changes. The ticks
   /// are emitted at the highest frame rate among the animated windows.
-  ///
-  /// Called on animation start and completion.
+  #[cfg(not(target_os = "windows"))]
   fn update_tick_rate(&mut self) {
     let frame_rate = self
       .slides
@@ -1085,12 +1336,6 @@ impl AnimationManager {
       .map(|slide| slide.clock.frame_rate)
       .chain(self.fades.values().map(|fade| fade.clock.frame_rate))
       .chain(self.lives.values().map(|live| live.clock.frame_rate))
-      .chain(
-        self
-          .closes
-          .iter()
-          .map(|closing| closing.state.clock.frame_rate),
-      )
       .max();
 
     // Keep the running task when the rate is unchanged, so ticks stay
@@ -1106,7 +1351,6 @@ impl AnimationManager {
     self.tick_frame_rate = frame_rate;
 
     let Some(frame_rate) = frame_rate else {
-      self.stats.idle();
       return;
     };
 
@@ -1193,6 +1437,27 @@ mod tests {
   }
 
   #[test]
+  fn slide_waits_at_its_start_until_the_compositor_starts_it() {
+    let mut slide = SlideState {
+      clock: clock(0, 200),
+      start_rect: Rect::from_xy(0, 0, 100, 100),
+      target_rect: Rect::from_xy(500, 0, 100, 100),
+    };
+
+    // Starts on a frame 16 ms from now.
+    let now = Instant::now();
+    slide.clock.start_time = now + Duration::from_millis(16);
+
+    assert_eq!(slide.rect_at(now), slide.start_rect);
+    assert!(!slide.clock.is_complete());
+    assert_eq!(slide.clock.end_time(), now + Duration::from_millis(216));
+    assert_eq!(
+      slide.rect_at(now + Duration::from_millis(300)),
+      slide.target_rect
+    );
+  }
+
+  #[test]
   fn overshooting_slide_never_inverts_the_size() {
     // Pulls far back before starting: the size would go below zero.
     let curve =
@@ -1224,21 +1489,9 @@ mod tests {
   }
 
   #[test]
-  fn close_starts_as_the_window() {
-    let (opacity, scale) = close(0, 0.95).current();
-
-    assert!((opacity.0 - 1.0).abs() < 0.05);
-    assert!((scale - 1.0).abs() < 0.01);
-  }
-
-  #[test]
-  fn close_ends_invisible_and_small() {
-    let closing = close(500, 0.95);
-    let (opacity, scale) = closing.current();
-
-    assert!(closing.is_complete());
-    assert!(opacity.0.abs() < f32::EPSILON);
-    assert!((scale - 0.95).abs() < f32::EPSILON);
+  fn close_ends_with_its_longer_clock() {
+    assert!(close(500, 0.95).is_complete());
+    assert!(!close(80, 0.95).is_complete());
   }
 
   #[test]
@@ -1251,12 +1504,5 @@ mod tests {
     };
 
     assert!(!closing.is_complete());
-  }
-
-  #[test]
-  fn fade_close_keeps_its_size() {
-    let (_, scale) = close(80, 1.0).current();
-
-    assert!((scale - 1.0).abs() < f32::EPSILON);
   }
 }

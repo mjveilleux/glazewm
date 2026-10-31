@@ -96,17 +96,23 @@ impl AnimationStats {
     }
   }
 
-  /// Records that a frame of the running animations was drawn.
-  pub fn frame(&mut self) {
-    let now = Instant::now();
-
+  /// Records that the running animations' first frame is shown at `at`,
+  /// e.g. the compositor frame an animation it plays starts on.
+  pub fn first_frame_at(&mut self, at: Instant) {
     if let Some(requested_at) = self.awaiting_first_frame.take() {
       tracing::debug!(
         target: LOG_TARGET,
-        start_ms = %format_ms(now - requested_at),
+        start_ms = %format_ms(at.saturating_duration_since(requested_at)),
         "First animation frame."
       );
     }
+  }
+
+  /// Records that a frame of the running animations was drawn by a tick.
+  pub fn frame(&mut self) {
+    let now = Instant::now();
+
+    self.first_frame_at(now);
 
     if let Some(run) = &mut self.run {
       if let Some(last_frame) = run.last_frame {
@@ -123,10 +129,6 @@ impl AnimationStats {
     self.awaiting_first_frame = None;
 
     let Some(run) = self.run.take() else {
-      return;
-    };
-
-    let Some(summary) = summarize(&run.intervals, run.frame_period) else {
       return;
     };
 
@@ -150,6 +152,24 @@ impl AnimationStats {
       / run.frame_period.as_secs_f64())
     .round() as u64;
 
+    let dwm_composed = compositor.map(|(composed, _)| composed);
+    let dwm_dropped = compositor.map(|(_, dropped)| dropped);
+
+    // Runs the compositor played on its own have no ticks to time.
+    let Some(summary) = summarize(&run.intervals, run.frame_period) else {
+      tracing::debug!(
+        target: LOG_TARGET,
+        frames = 0,
+        period_ms = %format_ms(run.frame_period),
+        duration_ms = %format_ms(duration),
+        dwm_composed,
+        dwm_dropped,
+        dwm_expected = expected,
+        "Animation frames."
+      );
+      return;
+    };
+
     tracing::debug!(
       target: LOG_TARGET,
       frames = summary.frames,
@@ -159,8 +179,8 @@ impl AnimationStats {
       late = summary.late,
       period_ms = %format_ms(run.frame_period),
       duration_ms = %format_ms(duration),
-      dwm_composed = compositor.map(|(composed, _)| composed),
-      dwm_dropped = compositor.map(|(_, dropped)| dropped),
+      dwm_composed,
+      dwm_dropped,
       dwm_expected = expected,
       "Animation frames."
     );

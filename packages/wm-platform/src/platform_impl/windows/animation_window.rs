@@ -23,11 +23,12 @@ use windows::{
         D3D11_USAGE_STAGING,
       },
       DirectComposition::{
-        DCompositionCreateDevice2, IDCompositionDesktopDevice,
-        IDCompositionRectangleClip, IDCompositionScaleTransform,
-        IDCompositionSurface, IDCompositionTarget, IDCompositionVisual,
-        IDCompositionVisual3,
+        DCompositionCreateDevice2, IDCompositionAnimation,
+        IDCompositionDesktopDevice, IDCompositionRectangleClip,
+        IDCompositionScaleTransform, IDCompositionSurface,
+        IDCompositionTarget, IDCompositionVisual, IDCompositionVisual3,
         DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        DCOMPOSITION_FRAME_STATISTICS,
       },
       Dxgi::{
         Common::{
@@ -53,8 +54,8 @@ use windows::{
 };
 
 use crate::{
-  platform_impl::com::COM_INIT, Dispatcher, NativeWindow, OpacityValue,
-  Rect, ThreadBound,
+  platform_impl::com::COM_INIT, AnimatedValue, AnimationCurve, Dispatcher,
+  NativeWindow, OpacityValue, OverlayAnimation, Rect, ThreadBound,
 };
 
 struct Direct3DDevice(IDirect3DDevice);
@@ -131,6 +132,37 @@ impl AnimationContext {
         }
         Ok(result)
       })
+    })?
+  }
+
+  /// Implements [`AnimationContext::next_frame_time`].
+  pub(crate) fn next_frame_time(
+    &self,
+    dispatcher: &Dispatcher,
+  ) -> crate::Result<std::time::Instant> {
+    dispatcher.dispatch_sync(|| {
+      let mut stats = DCOMPOSITION_FRAME_STATISTICS::default();
+
+      // SAFETY: `stats` is a valid, writable
+      // `DCOMPOSITION_FRAME_STATISTICS` for the call to fill in.
+      self.dcomp_device.with(|dcomp_device| unsafe {
+        dcomp_device.GetFrameStatistics(&raw mut stats)
+      })??;
+
+      let now = std::time::Instant::now();
+
+      if stats.timeFrequency <= 0 {
+        return Ok(now);
+      }
+
+      // LINT: QPC tick counts within a frame or two of now; exact enough
+      // as `f64`.
+      #[allow(clippy::cast_precision_loss)]
+      let until_next = (stats.nextEstimatedFrameTime - stats.currentTime)
+        .max(0) as f64
+        / stats.timeFrequency as f64;
+
+      Ok(now + std::time::Duration::from_secs_f64(until_next))
     })?
   }
 
@@ -232,7 +264,7 @@ pub(crate) struct AnimationWindow {
   /// Scales the fill to the window's current size.
   fill_scale: ThreadBound<IDCompositionScaleTransform>,
   /// Scales the whole capture about its center (1.0 unless set by
-  /// [`AnimationWindow::update_scaled`]).
+  /// [`AnimationWindow::animate`]).
   root_scale: ThreadBound<IDCompositionScaleTransform>,
   /// Frame of the `AnimationWindow`.
   outer_rect: Rect,
@@ -474,36 +506,163 @@ impl AnimationWindow {
     })?
   }
 
-  /// Implements [`AnimationWindow::update_scaled`].
-  #[allow(clippy::cast_precision_loss)]
-  pub(crate) fn update_scaled(
+  /// Implements [`AnimationWindow::animate`].
+  pub(crate) fn animate(
     &self,
-    inner_rect: &Rect,
-    opacity: Option<&OpacityValue>,
-    scale: f32,
+    animation: &OverlayAnimation,
   ) -> crate::Result<()> {
     self.dispatcher.dispatch_sync(|| {
-      Self::update_visual(
-        self.root_visual.get_ref()?,
-        self.clip.get_ref()?,
-        self.fill_scale.get_ref()?,
-        inner_rect,
-        &self.outer_rect,
-        opacity,
-      )?;
+      let device = self.dcomp_device.get_ref()?;
 
-      // About the center of the clipped capture, in the root visual's own
-      // coordinates (its offset is applied after the transform).
-      let root_scale = self.root_scale.get_ref()?;
-      unsafe {
-        root_scale.SetCenterX2(inner_rect.width() as f32 / 2.0)?;
-        root_scale.SetCenterY2(inner_rect.height() as f32 / 2.0)?;
-        root_scale.SetScaleX2(scale)?;
-        root_scale.SetScaleY2(scale)?;
+      self.animate_rect(device, &animation.rect)?;
+
+      if let Some(opacity) = &animation.opacity {
+        let channel = Channel::new(
+          device,
+          opacity.from.0,
+          opacity.to.0,
+          &opacity.curve,
+          OPACITY_ERROR,
+        )?;
+
+        let root_visual = self.root_visual.get_ref()?;
+
+        // SAFETY: The visual belongs to this overlay's device, on whose
+        // thread this runs.
+        unsafe {
+          channel.apply(
+            |value| root_visual.SetOpacity2(value),
+            |anim| root_visual.SetOpacity(anim),
+          )?;
+        }
       }
 
-      Ok(())
+      let scale = animation.scale.clone().unwrap_or(AnimatedValue {
+        from: 1.0,
+        to: 1.0,
+        curve: animation.rect.curve.clone(),
+      });
+
+      self.animate_scale(device, &scale, &animation.rect.to)
     })?
+  }
+
+  /// Animates where the snapshot is drawn within the overlay, and its
+  /// size (the clip and the fill).
+  #[allow(clippy::cast_precision_loss)]
+  fn animate_rect(
+    &self,
+    device: &IDCompositionDesktopDevice,
+    rect: &AnimatedValue<Rect>,
+  ) -> crate::Result<()> {
+    let fill_size = FILL_SIZE as f32;
+    let outer = &self.outer_rect;
+
+    // Builds the channel of one value of the rect.
+    let channel = |value: &dyn Fn(&Rect) -> f32, max_error: f32| {
+      Channel::new(
+        device,
+        value(&rect.from),
+        value(&rect.to),
+        &rect.curve,
+        max_error,
+      )
+    };
+
+    let offset_x =
+      channel(&|rect| (rect.x() - outer.x()) as f32, PIXEL_ERROR)?;
+    let offset_y =
+      channel(&|rect| (rect.y() - outer.y()) as f32, PIXEL_ERROR)?;
+    let clip_right = channel(&|rect| rect.width() as f32, PIXEL_ERROR)?;
+    let clip_bottom = channel(&|rect| rect.height() as f32, PIXEL_ERROR)?;
+    let fill_x = channel(
+      &|rect| rect.width() as f32 / fill_size,
+      PIXEL_ERROR / fill_size,
+    )?;
+    let fill_y = channel(
+      &|rect| rect.height() as f32 / fill_size,
+      PIXEL_ERROR / fill_size,
+    )?;
+
+    let root_visual = self.root_visual.get_ref()?;
+    let clip = self.clip.get_ref()?;
+    let fill_scale = self.fill_scale.get_ref()?;
+
+    // SAFETY: The visual, clip and transform belong to this overlay's
+    // device, on whose thread this runs.
+    unsafe {
+      offset_x.apply(
+        |value| root_visual.SetOffsetX2(value),
+        |anim| root_visual.SetOffsetX(anim),
+      )?;
+      offset_y.apply(
+        |value| root_visual.SetOffsetY2(value),
+        |anim| root_visual.SetOffsetY(anim),
+      )?;
+      clip_right.apply(
+        |value| clip.SetRight2(value),
+        |anim| clip.SetRight(anim),
+      )?;
+      clip_bottom.apply(
+        |value| clip.SetBottom2(value),
+        |anim| clip.SetBottom(anim),
+      )?;
+      fill_x.apply(
+        |value| fill_scale.SetScaleX2(value),
+        |anim| fill_scale.SetScaleX(anim),
+      )?;
+      fill_y.apply(
+        |value| fill_scale.SetScaleY2(value),
+        |anim| fill_scale.SetScaleY(anim),
+      )?;
+    }
+
+    Ok(())
+  }
+
+  /// Animates the scale of the whole snapshot, about the center of `rect`
+  /// (where it ends).
+  #[allow(clippy::cast_precision_loss)]
+  fn animate_scale(
+    &self,
+    device: &IDCompositionDesktopDevice,
+    scale: &AnimatedValue<f32>,
+    rect: &Rect,
+  ) -> crate::Result<()> {
+    let scale_x = Channel::new(
+      device,
+      scale.from,
+      scale.to,
+      &scale.curve,
+      SCALE_ERROR,
+    )?;
+    let scale_y = Channel::new(
+      device,
+      scale.from,
+      scale.to,
+      &scale.curve,
+      SCALE_ERROR,
+    )?;
+
+    let root_scale = self.root_scale.get_ref()?;
+
+    // SAFETY: The transform belongs to this overlay's device, on whose
+    // thread this runs.
+    unsafe {
+      // In the root visual's own coordinates.
+      root_scale.SetCenterX2(rect.width() as f32 / 2.0)?;
+      root_scale.SetCenterY2(rect.height() as f32 / 2.0)?;
+      scale_x.apply(
+        |value| root_scale.SetScaleX2(value),
+        |anim| root_scale.SetScaleX(anim),
+      )?;
+      scale_y.apply(
+        |value| root_scale.SetScaleY2(value),
+        |anim| root_scale.SetScaleY(anim),
+      )?;
+    }
+
+    Ok(())
   }
 
   /// Moves the visuals to the window's current rect within the overlay,
@@ -920,5 +1079,76 @@ impl CapturedFrame {
 impl Drop for CapturedFrame {
   fn drop(&mut self) {
     let _ = self.close();
+  }
+}
+
+/// Largest error of an animated value from its curve, in the value's own
+/// units: half a pixel for positions and sizes.
+const PIXEL_ERROR: f32 = 0.5;
+const OPACITY_ERROR: f32 = 0.002;
+const SCALE_ERROR: f32 = 0.0005;
+
+/// One animated property of an overlay: a fixed value, or an animation
+/// for the compositor to play.
+enum Channel {
+  Fixed(f32),
+  Animated(IDCompositionAnimation),
+}
+
+impl Channel {
+  /// Builds the animation of a value from `from` to `to` along `curve`,
+  /// within `max_error` of the curve. A value that doesn't change, or
+  /// changes at once, is fixed at `to`.
+  fn new(
+    device: &IDCompositionDesktopDevice,
+    from: f32,
+    to: f32,
+    curve: &AnimationCurve,
+    max_error: f32,
+  ) -> crate::Result<Self> {
+    let duration_s = curve.duration.as_secs_f64();
+
+    if (from - to).abs() < f32::EPSILON || duration_s <= 0.0 {
+      return Ok(Self::Fixed(to));
+    }
+
+    // SAFETY: Called on the device's thread, with plain values.
+    unsafe {
+      let animation = device.CreateAnimation()?;
+
+      for segment in
+        curve.easing.cubic_segments(from, to, duration_s, max_error)
+      {
+        animation.AddCubic(
+          segment.begin,
+          segment.constant,
+          segment.linear,
+          segment.quadratic,
+          segment.cubic,
+        )?;
+      }
+
+      // Holds the last value from here on.
+      animation.End(duration_s, to)?;
+
+      Ok(Self::Animated(animation))
+    }
+  }
+
+  /// Sets the property: `set_value` for a fixed value, `set_animation`
+  /// for an animation.
+  fn apply(
+    &self,
+    set_value: impl FnOnce(f32) -> windows::core::Result<()>,
+    set_animation: impl FnOnce(
+      &IDCompositionAnimation,
+    ) -> windows::core::Result<()>,
+  ) -> crate::Result<()> {
+    match self {
+      Self::Fixed(value) => set_value(*value)?,
+      Self::Animated(animation) => set_animation(animation)?,
+    }
+
+    Ok(())
   }
 }

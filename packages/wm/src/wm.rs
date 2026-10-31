@@ -224,7 +224,8 @@ impl WindowManager {
     Ok(())
   }
 
-  /// Updates all active animations and redraws windows that are animating.
+  /// Updates the animations that change every frame, on a tick, then
+  /// ends the ones that are over.
   pub fn update_animations(
     &mut self,
     config: &UserConfig,
@@ -233,6 +234,20 @@ impl WindowManager {
       .state
       .animation_manager
       .tick_update(&self.state.dispatcher)?;
+
+    self.end_finished_animations(config)
+  }
+
+  /// Ends animations that are over: closes lose their overlay, and
+  /// windows done moving are redrawn at their place.
+  ///
+  /// Called on each tick, and when an animation the compositor plays on
+  /// its own is due to end (`AnimationManager::next_deadline`).
+  pub fn end_finished_animations(
+    &mut self,
+    config: &UserConfig,
+  ) -> anyhow::Result<()> {
+    self.state.animation_manager.end_completed_closes();
 
     // A sync now would take the held back changes along, without their
     // animations. Finished animations stay at their end until the settle

@@ -1,4 +1,10 @@
-use crate::{platform_impl, Dispatcher, NativeWindow, OpacityValue, Rect};
+use std::time::Duration;
+#[cfg(target_os = "windows")]
+use std::time::Instant;
+
+use crate::{
+  platform_impl, Dispatcher, Easing, NativeWindow, OpacityValue, Rect,
+};
 
 /// Shared context used by [`AnimationWindow`] instances. Holds GPU
 /// resources that can be shared between animations.
@@ -30,6 +36,20 @@ impl AnimationContext {
     R: Send,
   {
     self.inner.transaction(update_fn, dispatcher)
+  }
+
+  /// Estimates when the compositor shows its next frame: when animations
+  /// committed now start playing.
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  #[cfg(target_os = "windows")]
+  pub fn next_frame_time(
+    &self,
+    dispatcher: &Dispatcher,
+  ) -> crate::Result<Instant> {
+    self.inner.next_frame_time(dispatcher)
   }
 }
 
@@ -147,26 +167,24 @@ impl AnimationWindow {
     self.inner.update(inner_rect, opacity)
   }
 
-  /// Like [`AnimationWindow::update`], and also scales the capture about
-  /// its center (`1.0` is its own size).
+  /// Plays an animation of the snapshot on the compositor's own clock, so
+  /// every frame is drawn on time without the caller's help.
   ///
-  /// For a window leaving: unlike a slide's resize, which cuts the
-  /// capture, this shrinks the whole picture.
-  ///
-  /// Does not commit; should be called within
-  /// `AnimationContext::transaction` for the change to take effect.
+  /// Replaces any animation already playing. Does not commit; should be
+  /// called within [`AnimationContext::transaction`], and the animation
+  /// starts with the frame that shows the commit (see
+  /// [`AnimationContext::next_frame_time`]). Each value holds at its end
+  /// once its animation is over.
   ///
   /// # Platform-specific
   ///
   /// This method is only available on Windows.
   #[cfg(target_os = "windows")]
-  pub fn update_scaled(
+  pub fn animate(
     &self,
-    inner_rect: &Rect,
-    opacity: Option<&OpacityValue>,
-    scale: f32,
+    animation: &OverlayAnimation,
   ) -> crate::Result<()> {
-    self.inner.update_scaled(inner_rect, opacity, scale)
+    self.inner.animate(animation)
   }
 
   /// Destroys the window and releases GPU resources.
@@ -189,4 +207,35 @@ pub struct AnimationWindowRequest<'a> {
 
   /// Initial opacity of the capture, if animated.
   pub opacity: Option<OpacityValue>,
+}
+
+/// Duration and curve of one part of an [`OverlayAnimation`].
+#[derive(Clone, Debug)]
+pub struct AnimationCurve {
+  pub duration: Duration,
+  pub easing: Easing,
+}
+
+/// A value animated from one end to another along a curve.
+#[derive(Clone, Debug)]
+pub struct AnimatedValue<T> {
+  pub from: T,
+  pub to: T,
+  pub curve: AnimationCurve,
+}
+
+/// An animation of an [`AnimationWindow`]'s snapshot, for
+/// [`AnimationWindow::animate`].
+#[derive(Clone, Debug)]
+pub struct OverlayAnimation {
+  /// Where the snapshot is drawn (in screen coordinates), cut to the
+  /// rect's size.
+  pub rect: AnimatedValue<Rect>,
+
+  /// The snapshot's opacity; left as it is if `None`.
+  pub opacity: Option<AnimatedValue<OpacityValue>>,
+
+  /// Scale of the whole snapshot about the rect's center (`1.0` is its
+  /// own size); `1.0` if `None`.
+  pub scale: Option<AnimatedValue<f32>>,
 }

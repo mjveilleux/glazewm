@@ -1,6 +1,8 @@
 use windows::Win32::{
   Foundation::{BOOL, HWND},
-  Graphics::Dwm::{DwmGetCompositionTimingInfo, DWM_TIMING_INFO},
+  Graphics::Dwm::{
+    DwmFlush, DwmGetCompositionTimingInfo, DWM_TIMING_INFO,
+  },
   UI::WindowsAndMessaging::{
     SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
@@ -56,4 +58,13 @@ pub(crate) fn system_animations_enabled() -> bool {
   }
 
   enabled.as_bool()
+}
+
+/// Implements [`crate::wait_for_compositor_frame`].
+pub(crate) fn wait_for_compositor_frame() -> crate::Result<()> {
+  // SAFETY: `DwmFlush` takes no arguments and only blocks the calling
+  // thread.
+  unsafe { DwmFlush() }?;
+
+  Ok(())
 }
