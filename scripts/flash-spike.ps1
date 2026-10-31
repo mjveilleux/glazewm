@@ -64,6 +64,7 @@ public static class H {
       if (!title.StartsWith("ext-")) return;
       if (title == "ext-cloak") { Log.Add(title + " cloak: " + N.Cloak(h, true)); return; }
       N.Alpha(h, 0);
+      Log.Add(title + " hook latency ms: " + (unchecked((uint)Environment.TickCount - t)));
       if (title == "ext-alpha-notrans") Log.Add(title + " no transitions: " + N.NoTransitions(h));
       Log.Add(title + " hidden at create");
     };
@@ -71,8 +72,11 @@ public static class H {
   }
 }
 '@
+# Highest priority for the hook's thread, so it wakes as soon as an event is posted.
+[System.Threading.Thread]::CurrentThread.Priority = 'Highest'
+[System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'High'
 [H]::Start()
-`$end = [DateTime]::UtcNow.AddSeconds(40)
+`$end = [DateTime]::UtcNow.AddSeconds(90)
 while ([DateTime]::UtcNow -lt `$end) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 1
   if (`$([H]::Log.Count)) { [H]::Log | Add-Content "$Out\hook.txt"; [H]::Log.Clear() } }
 "@ | Set-Content $hook -Encoding utf8
@@ -98,7 +102,12 @@ function Wait-Ms($ms) {
     while ([DateTime]::UtcNow -lt $until) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 2 }
 }
 
-foreach ($variant in 'plain', 'alpha', 'alpha-notrans', 'cloak', 'offscreen', 'ext-alpha', 'ext-alpha-notrans', 'ext-cloak') {
+# The in-process variants once each; the race with the other process (the window shown right
+# after it's created, as apps do) many times over, to see how often the hook wins it.
+$variants = @('plain', 'alpha', 'alpha-notrans', 'cloak', 'offscreen', 'ext-cloak')
+$variants += 1..20 | ForEach-Object { 'ext-alpha' }
+$variants += 1..20 | ForEach-Object { 'ext-alpha-notrans' }
+foreach ($variant in $variants) {
     $form = New-Object System.Windows.Forms.Form
     $form.Text = $variant
     $form.BackColor = [System.Drawing.Color]::Magenta
@@ -111,10 +120,11 @@ foreach ($variant in 'plain', 'alpha', 'alpha-notrans', 'cloak', 'offscreen', 'e
         'alpha-notrans' { [N]::Alpha($h, 0); $r = [N]::NoTransitions($h); Write-Event "$variant no transitions: $r" }
         'cloak' { $r = [N]::Cloak($h, $true); Write-Event "$variant cloak: $r" }
     }
-    Wait-Ms 150
+    # Apps show their window right after creating it: no head start for the other process.
+    if (-not $variant.StartsWith('ext-')) { Wait-Ms 150 }
     Write-Event "show $variant"
     $form.Show()
-    Wait-Ms 600
+    Wait-Ms 400
     Write-Event "reveal $variant"
     switch -Wildcard ($variant) {
         'cloak' { [void][N]::Cloak($h, $false) }
@@ -123,10 +133,10 @@ foreach ($variant in 'plain', 'alpha', 'alpha-notrans', 'cloak', 'offscreen', 'e
         'ext-cloak' { }
         default { [N]::Alpha($h, 255) }
     }
-    Wait-Ms 500
+    Wait-Ms 200
     Write-Event "close $variant"
     $form.Close(); $form.Dispose()
-    Wait-Ms 700
+    Wait-Ms 400
 }
 
 $ff.StandardInput.Write('q'); $ff.StandardInput.Close()
