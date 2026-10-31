@@ -273,7 +273,16 @@ fn hide(window: &NativeWindow) {
     return;
   };
 
+  // Hidden already, when it was created: made transparent again, since an
+  // app setting its own window styles while it starts up can wipe it out
+  // (CI showed Notepad doing so).
   if hidden.contains_key(&handle) {
+    if let Err(err) =
+      window.set_transparency(&crate::OpacityValue::from_alpha(0))
+    {
+      tracing::debug!("Failed to keep a new window hidden: {err}");
+    }
+
     return;
   }
 
