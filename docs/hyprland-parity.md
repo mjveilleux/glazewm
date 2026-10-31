@@ -129,3 +129,17 @@ Timings are from the `animation-check` workflow (slowed run, 600 ms animations),
 | 0 | code done; baseline pending | `glazewm::anim` logs start latency, capture latency, frame intervals (mean / p95 / max / late) and DWM's composed / dropped frames per run. `checks.txt` gets the timing table and an exact-final-frame check. The baseline needs the `animation-check` workflow, which is disabled in the repo's Actions settings. |
 | 1 | code done; CI pending | Cubic beziers (baked, overshoot allowed), the node tree with inheritance, fade nodes for opacity, deprecated keys mapped in, ≥ 1 px clamp, Windows' Animation effects setting followed. Unit tests run in the lint workflow. |
 | 2–7 | not started | Blocked on the `animation-check` workflow: every later phase's acceptance is measured there. |
+
+## 7. Spike findings
+
+### Phase 3.1: capturing hidden and transparent windows
+
+Run on GitHub's Windows Server 2025 runner (`scripts/capture-spike.ps1`, results on `ci/capture-spike--claude-hyprland-parity`), with Notepad, Edge (Chromium, `Chrome_WidgetWin_1`) and two Windows Terminal windows (flip-model swap chain, `CASCADIA_HOSTING_WINDOW_CLASS`):
+
+| State | Windows.Graphics.Capture |
+|---|---|
+| visible | a frame in 95–180 ms (no GPU), 96–100% of pixels drawn |
+| cloaked (another workspace shown) | refused for every window: `CreateForWindow` fails with `E_INVALIDARG` |
+| layered alpha 0 (uncloaked) | a full frame in 94–103 ms, 96–100% drawn; the screenshot shows all four windows invisible |
+
+So no texture cache: outgoing windows are captured just before they're hidden, and incoming ones are uncloaked at alpha 0, captured, then revealed. The capture costs one capture's latency at the start of a switch (1–3 frames with a GPU). This is the design section 3 already chose; nothing changes. `DwmRegisterThumbnail` wasn't needed. UWP apps weren't testable (none on Windows Server); `hide_on_show` already relies on layered alpha for every app, UWP included.
