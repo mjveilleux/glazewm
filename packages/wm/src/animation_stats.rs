@@ -41,6 +41,10 @@ struct Run {
 
   /// Compositor's frame counts as the run started.
   compositor_start: Option<CompositorFrameCounts>,
+
+  /// Stop flag of the thread timing the compositor's frames meanwhile.
+  #[cfg(target_os = "windows")]
+  frame_probe: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Summary of the time between an animation run's frames.
@@ -91,6 +95,8 @@ impl AnimationStats {
           last_frame: None,
           intervals: Vec::new(),
           compositor_start: compositor_frame_counts(),
+          #[cfg(target_os = "windows")]
+          frame_probe: start_frame_probe(frame_period),
         });
       }
     }
@@ -125,6 +131,11 @@ impl AnimationStats {
     let Some(run) = self.run.take() else {
       return;
     };
+
+    #[cfg(target_os = "windows")]
+    if let Some(stop) = &run.frame_probe {
+      stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 
     let Some(summary) = summarize(&run.intervals, run.frame_period) else {
       return;
@@ -164,6 +175,67 @@ impl AnimationStats {
       dwm_expected = expected,
       "Animation frames."
     );
+  }
+}
+
+/// Starts a thread that times every frame the compositor shows until
+/// stopped, then logs how evenly they came: what the eye sees of
+/// animations the compositor plays on its own, which the WM doesn't tick.
+///
+/// Returns its stop flag, or `None` if it couldn't start.
+#[cfg(target_os = "windows")]
+fn start_frame_probe(
+  frame_period: Duration,
+) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+  use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+  };
+
+  let stop = Arc::new(AtomicBool::new(false));
+  let thread_stop = stop.clone();
+
+  let spawned = std::thread::Builder::new()
+    .name("animation-frame-probe".to_string())
+    .spawn(move || {
+      let mut last = Instant::now();
+      let mut intervals = Vec::new();
+
+      while !thread_stop.load(Ordering::Relaxed) {
+        if wm_platform::wait_for_compositor_frame().is_err() {
+          return;
+        }
+
+        let now = Instant::now();
+        intervals.push(now - last);
+        last = now;
+      }
+
+      // The first wait started mid-frame; it's not a whole interval.
+      if !intervals.is_empty() {
+        intervals.remove(0);
+      }
+
+      if let Some(summary) = summarize(&intervals, frame_period) {
+        tracing::debug!(
+          target: LOG_TARGET,
+          frames = summary.frames,
+          mean_ms = %format!("{:.1}", summary.mean_ms),
+          p95_ms = %format!("{:.1}", summary.p95_ms),
+          max_ms = %format!("{:.1}", summary.max_ms),
+          late = summary.late,
+          period_ms = %format_ms(frame_period),
+          "Compositor frames."
+        );
+      }
+    });
+
+  match spawned {
+    Ok(_) => Some(stop),
+    Err(err) => {
+      tracing::debug!("Failed to start the frame probe: {err}");
+      None
+    }
   }
 }
 

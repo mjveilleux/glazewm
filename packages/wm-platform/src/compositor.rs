@@ -25,3 +25,29 @@ pub struct CompositorFrameCounts {
 pub fn compositor_frame_counts() -> Option<CompositorFrameCounts> {
   platform_impl::compositor_frame_counts()
 }
+
+/// Whether the system lets apps animate, i.e. the user hasn't turned
+/// animations off for accessibility.
+///
+/// # Platform-specific
+///
+/// - **Windows**: The "Animation effects" setting (Settings >
+///   Accessibility > Visual effects), `SPI_GETCLIENTAREAANIMATION`.
+/// - **macOS**: Always `true`.
+#[must_use]
+pub fn system_animations_enabled() -> bool {
+  platform_impl::system_animations_enabled()
+}
+
+/// Blocks until the system compositor has shown its next frame.
+///
+/// For pacing work that must happen once per frame (e.g. moving a window
+/// a little each frame) with the display instead of a timer.
+///
+/// # Platform-specific
+///
+/// This function is only available on Windows (`DwmFlush`).
+#[cfg(target_os = "windows")]
+pub fn wait_for_compositor_frame() -> crate::Result<()> {
+  platform_impl::wait_for_compositor_frame()
+}
