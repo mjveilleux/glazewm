@@ -1,0 +1,56 @@
+name: Capture spike
+
+# Phase 3.1 spike of docs/hyprland-parity.md: what Windows.Graphics.Capture gets from cloaked and
+# fully transparent windows (scripts/capture-spike.ps1). Results go to the branch
+# ci/capture-spike--<branch> (slashes made dashes).
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['packages/wm-platform/examples/capture_spike.rs', 'scripts/capture-spike.ps1', '.github/workflows/capture-spike.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  spike:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@21dc36fb71dd22e3317045c0c31a3f4249868b17
+        with:
+          toolchain: nightly
+
+      - uses: swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3
+        with:
+          shared-key: animation-check-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build
+        shell: bash
+        run: |
+          cargo build --locked --release -p wm -p wm-cli
+          cargo build --locked --release -p wm-platform --example capture_spike
+
+      - name: Spike
+        shell: pwsh
+        run: ./scripts/capture-spike.ps1
+
+      - name: Publish to ci/capture-spike--<branch>
+        if: always()
+        shell: bash
+        env:
+          TOKEN: ${{ github.token }}
+          SOURCE: ${{ github.ref_name }}
+        run: |
+          target="ci/capture-spike--${SOURCE//\//-}"
+          mkdir -p out-spike
+          cd out-spike
+          git init -q
+          git checkout -q -b "$target"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -q -m "Capture spike: run ${{ github.run_id }} on ${{ github.sha }}"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}" "$target"
