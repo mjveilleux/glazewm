@@ -54,6 +54,13 @@ jobs:
         shell: pwsh
         run: ./scripts/animation-check.ps1 -Out out-real -DurationMs 200 -OpenMs 150 -CloseMs 160
 
+      # Again with nothing recorded, at real speed: recording the screen slows the GPU-less runner's
+      # compositor, so this run's timing table is the one that shows the animations alone.
+      - name: Measure timing (nothing recorded)
+        if: always()
+        shell: pwsh
+        run: ./scripts/animation-check.ps1 -Out out-timing -DurationMs 200 -OpenMs 150 -CloseMs 160 -NoRecording
+
       # Animations off (animations.enabled: false, settings kept): nothing may animate, and no
       # overlay may appear.
       - name: Record with animations off
@@ -73,6 +80,7 @@ jobs:
           if [ -f out/screen.mp4 ]; then cp out/screen.mp4 results/screen-slowed.mp4; fi
           if [ -f out-real/screen.mp4 ]; then cp out-real/screen.mp4 results/screen-real-speed.mp4; fi
           cp out/*.txt out/*.log out/*.json out/config.yaml results/ 2>/dev/null || true
+          if [ -f out-timing/checks.txt ]; then cp out-timing/checks.txt results/checks-unrecorded.txt; fi
 
       # One results branch per source branch (ci/animation-check--claude-foo for
       # claude/foo), so runs of different branches never overwrite each other.
