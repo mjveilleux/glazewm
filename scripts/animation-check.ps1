@@ -130,6 +130,20 @@ if (-not $ready) {
 }
 Write-Event 'glazewm ready'
 
+# With $env:FFMPEG set (the workflow does), the screen is also recorded as video at up to 60 fps,
+# with each frame's real time kept, to out\screen.mp4.
+$ffmpeg = $null
+if ($env:FFMPEG -and (Test-Path $env:FFMPEG)) {
+    $ffmpegInfo = New-Object System.Diagnostics.ProcessStartInfo $env:FFMPEG
+    $ffmpegInfo.Arguments = "-y -loglevel warning -f gdigrab -framerate 60 -draw_mouse 0 -i desktop " +
+        "-fps_mode passthrough -c:v libx264 -preset ultrafast -crf 20 -pix_fmt yuv420p `"$Out\screen.mp4`""
+    $ffmpegInfo.UseShellExecute = $false
+    $ffmpegInfo.RedirectStandardInput = $true
+    $ffmpegInfo.RedirectStandardError = $true
+    $ffmpeg = [System.Diagnostics.Process]::Start($ffmpegInfo)
+    $ffmpegErrors = $ffmpeg.StandardError.ReadToEndAsync()
+}
+
 $rec = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "`"$recorder`"", "`"$Out\frames`"", $start, 30 -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 1
 
@@ -208,6 +222,13 @@ Save-State 'move'
 
 Write-Event 'done'
 $rec | Wait-Process -Timeout 40 -ErrorAction SilentlyContinue
+if ($ffmpeg) {
+    # 'q' asks ffmpeg to finish the file.
+    $ffmpeg.StandardInput.Write('q')
+    $ffmpeg.StandardInput.Close()
+    if (-not $ffmpeg.WaitForExit(20000)) { $ffmpeg.Kill() }
+    $ffmpegErrors.Result | Set-Content "$Out\ffmpeg.log"
+}
 
 # What's on screen once everything has settled.
 $failed = $false
