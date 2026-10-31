@@ -2,8 +2,8 @@ name: Animation check
 
 # Runs GlazeWM with window animations on a Windows desktop, records the screen while windows
 # open, close and reflow, and uploads the frames (scripts/animation-check.ps1). The contact
-# sheets (one image per step), checks and logs also go to the branch ci/animation-check, so
-# they can be read with git alone.
+# sheets (one image per step), checks and logs also go to the branch ci/animation-check--<branch>
+# (slashes made dashes), so they can be read with git alone.
 on:
   push:
     branches: ['claude/**', 'omawin']
@@ -65,20 +65,24 @@ jobs:
           if [ -d out-real/frames ]; then python scripts/animation-video.py out-real results/real-speed-half.mp4 'real speed, played at half speed' 0.5; fi
           cp out/*.txt out/*.log out/*.json out/config.yaml results/ 2>/dev/null || true
 
-      - name: Publish to ci/animation-check
+      # One results branch per source branch (ci/animation-check--claude-foo for
+      # claude/foo), so runs of different branches never overwrite each other.
+      - name: Publish to ci/animation-check--<branch>
         if: always()
         shell: bash
         env:
           TOKEN: ${{ github.token }}
+          SOURCE: ${{ github.ref_name }}
         run: |
+          target="ci/animation-check--${SOURCE//\//-}"
           cd results
           git init -q
-          git checkout -q -b ci/animation-check
+          git checkout -q -b "$target"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -q -m "Animation check: run ${{ github.run_id }} on ${{ github.sha }}"
-          git push -q -f "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}" ci/animation-check
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}" "$target"
 
       - name: Upload recording
         if: always()
