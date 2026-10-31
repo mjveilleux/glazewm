@@ -891,19 +891,27 @@ impl AnimationManager {
   ) -> Option<AnimationPlan> {
     // Skip animation if:
     //  - The window is minimized.
-    //  - The window is maximized (macOS only - can't override the OS's
-    //    animation).
     //  - The window is hidden in the corner, but not animating. Safeguards
     //    against race condition where window finished an animation, but
     //    hasn't been moved to the real window position yet.
     //  - The system's own animations are turned off (accessibility).
     if !wm_platform::system_animations_enabled()
       || window.native_properties().is_minimized
-      || (window.native_properties().is_maximized
-        && cfg!(target_os = "macos"))
       || (!self.is_animating(&window.id())
         && window.is_in_corner(&monitor_properties.working_area))
     {
+      return None;
+    }
+
+    // Maximized and fullscreen windows move at once: the OS animates
+    // maximizing itself (and can't be overridden on macOS), and a
+    // fullscreen window's snapshot would cover the whole monitor.
+    if window.native_properties().is_maximized
+      || matches!(window.state(), wm_common::WindowState::Fullscreen(_))
+    {
+      tracing::debug!(
+        "Moving maximized or fullscreen window without animation: {window}"
+      );
       return None;
     }
 
@@ -1134,6 +1142,69 @@ impl AnimationManager {
       None => return,
     };
 
+    if !self.play_close(overlay, rect, effect, frame_rate, dispatcher) {
+      return;
+    }
+
+    // The snapshot is the window's exit; the system's own close transition
+    // would play over it. If the app keeps the window open, it only loses
+    // the system's minimize animation.
+    if let Err(err) = native.set_transitions_disabled(true) {
+      tracing::debug!("Failed to disable system transitions: {err}");
+    }
+  }
+
+  /// Ends the slide of a window its app has just closed by playing the
+  /// close animation on the slide's snapshot, from where it is now; the
+  /// window itself is gone and can't be captured anymore. Without a
+  /// running slide (or a close animation configured), the window just
+  /// vanishes.
+  #[cfg(target_os = "windows")]
+  pub fn close_sliding_window(
+    &mut self,
+    window_id: &Uuid,
+    config: &UserConfig,
+    frame_rate: u32,
+    dispatcher: &Dispatcher,
+  ) {
+    let Some(effect) = config
+      .value
+      .animations
+      .close_effect()
+      .filter(|_| wm_platform::system_animations_enabled())
+    else {
+      return;
+    };
+
+    let Some(slide) = self.slides.get(window_id) else {
+      return;
+    };
+
+    let rect = slide.rect_at(self.next_frame_time(dispatcher));
+
+    let Some(overlay) = self.windows.remove(window_id) else {
+      return;
+    };
+
+    self.slides.remove(window_id);
+    self.update_ticking();
+    self.play_close(overlay, rect, effect, frame_rate, dispatcher);
+  }
+
+  /// Plays a close animation on a snapshot at `rect`: it fades out (and
+  /// shrinks or folds, for `popin` or `gnomed`), then the overlay is
+  /// destroyed.
+  ///
+  /// Returns whether it plays; if not, the overlay is destroyed at once.
+  #[cfg(target_os = "windows")]
+  fn play_close(
+    &mut self,
+    overlay: AnimationWindow,
+    rect: Rect,
+    effect: &ResolvedEffect,
+    frame_rate: u32,
+    dispatcher: &Dispatcher,
+  ) -> bool {
     // Started once the snapshot is up, so its capture doesn't eat into the
     // animation.
     let start_at = self.next_frame_time(dispatcher);
@@ -1170,7 +1241,9 @@ impl AnimationManager {
       Some(context) => context
         .transaction(|| overlay.animate(&animation), dispatcher)
         .and_then(|result| result),
-      None => return,
+      None => Err(wm_platform::Error::Platform(
+        "Animation context not initialized.".to_string(),
+      )),
     };
 
     if let Err(err) = result {
@@ -1184,20 +1257,15 @@ impl AnimationManager {
         }
       });
 
-      return;
-    }
-
-    // The snapshot is the window's exit; the system's own close transition
-    // would play over it. If the app keeps the window open, it only loses
-    // the system's minimize animation.
-    if let Err(err) = native.set_transitions_disabled(true) {
-      tracing::debug!("Failed to disable system transitions: {err}");
+      return false;
     }
 
     self.closes.push(Closing { state, overlay });
     self.stats.animation_started(frame_rate);
     self.stats.first_frame_at(start_at);
     self.update_ticking();
+
+    true
   }
 
   /// Gets slides ready to start, for windows not sliding yet or slides
@@ -1316,7 +1384,9 @@ impl AnimationManager {
           self.prepared.push(slide);
         }
         Err(err) => {
-          tracing::warn!("Failed to create animation window: {err}");
+          tracing::debug!(
+            "Window can't be captured; it moves without animation: {err}"
+          );
         }
       }
     }

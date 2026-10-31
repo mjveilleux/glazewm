@@ -144,7 +144,7 @@ impl WindowManager {
           handle_window_title_changed(&window, state, config)
         }
         WindowEvent::Destroyed { window_id, .. } => {
-          handle_window_destroyed(window_id, state)
+          handle_window_destroyed(window_id, state, config)
         }
       },
     }?;
