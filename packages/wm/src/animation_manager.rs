@@ -626,7 +626,6 @@ impl AnimationManager {
           Some(AnimationPlan::FadeIn(effect.clone()))
         }
       }
-      AnimationEffect::Fade => None,
       // Live animations move the real window, which is only done on
       // Windows. A window already moving keeps moving to its new target,
       // and one mid-slide finishes its slide.
@@ -643,7 +642,10 @@ impl AnimationManager {
           })
         }
       }
-      AnimationEffect::Move | AnimationEffect::Popin => None,
+      // Off Windows, nothing animates.
+      AnimationEffect::Fade
+      | AnimationEffect::Move
+      | AnimationEffect::Popin => None,
     }
   }
 
