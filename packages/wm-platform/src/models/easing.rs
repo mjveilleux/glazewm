@@ -40,6 +40,15 @@ impl EasingPreset {
   /// Returns the eased value, also in the range 0.0 to 1.0.
   #[must_use]
   pub fn apply(self, progress: f32) -> f32 {
+    // LINT: Eased values are in [0, 1]; `f32` keeps plenty of precision.
+    #[allow(clippy::cast_possible_truncation)]
+    let eased = self.apply_f64(f64::from(progress)) as f32;
+    eased
+  }
+
+  /// Like [`EasingPreset::apply`], in `f64`.
+  #[must_use]
+  pub fn apply_f64(self, progress: f64) -> f64 {
     match self {
       Self::Linear => progress,
       Self::EaseInOut => {
@@ -303,6 +312,149 @@ impl Easing {
   }
 }
 
+/// One piece of an animated value, as a cubic polynomial of time: from
+/// `begin` seconds into the animation, the value is
+/// `constant + linear s + quadratic s² + cubic s³`, `s` being the seconds
+/// since `begin`. The form compositors take (DirectComposition's
+/// `IDCompositionAnimation::AddCubic`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CubicSegment {
+  pub begin: f64,
+  pub constant: f32,
+  pub linear: f32,
+  pub quadratic: f32,
+  pub cubic: f32,
+}
+
+impl CubicSegment {
+  /// Gets the segment's value `seconds` into the animation.
+  #[must_use]
+  pub fn value_at(&self, seconds: f64) -> f64 {
+    let s = seconds - self.begin;
+
+    f64::from(self.constant)
+      + s
+        * (f64::from(self.linear)
+          + s * (f64::from(self.quadratic) + s * f64::from(self.cubic)))
+  }
+}
+
+impl Easing {
+  /// Like [`Easing::apply`], in `f64` and without the baked samples: for
+  /// when exactness matters more than speed.
+  #[must_use]
+  pub fn apply_exact(&self, progress: f64) -> f64 {
+    match self {
+      Self::Preset(preset) => preset.apply_f64(progress.clamp(0.0, 1.0)),
+      Self::Bezier(bezier) => bezier.y_at_exact(progress),
+    }
+  }
+
+  /// Approximates a value going from `from` to `to` along this curve
+  /// over `duration_s` seconds, as cubic segments a compositor can play
+  /// on its own clock.
+  ///
+  /// Uses as few segments as keep every point within `max_error` (in the
+  /// value's own units, e.g. half a pixel for a position) of the curve,
+  /// between 8 and 64. The value holds at `to` after the last segment.
+  ///
+  /// Returns no segments for a zero duration: the value is `to` at once.
+  #[must_use]
+  pub fn cubic_segments(
+    &self,
+    from: f32,
+    to: f32,
+    duration_s: f64,
+    max_error: f32,
+  ) -> Vec<CubicSegment> {
+    const MIN_SEGMENTS: usize = 8;
+    const MAX_SEGMENTS: usize = 64;
+
+    if duration_s <= 0.0 || !duration_s.is_finite() {
+      return Vec::new();
+    }
+
+    let (from, to) = (f64::from(from), f64::from(to));
+    let value =
+      |progress: f64| from + (to - from) * self.apply_exact(progress);
+
+    // Slope in value per second, from a central difference (one-sided at
+    // the ends).
+    let slope = |progress: f64| {
+      const STEP: f64 = 1e-5;
+      let low = (progress - STEP).max(0.0);
+      let high = (progress + STEP).min(1.0);
+      (value(high) - value(low)) / ((high - low) * duration_s)
+    };
+
+    let mut count = MIN_SEGMENTS;
+
+    loop {
+      let segments = (0..count)
+        .map(|index| {
+          // LINT: Segment counts are tiny, exact as `f64`.
+          #[allow(clippy::cast_precision_loss)]
+          let (start, end) = (
+            index as f64 / count as f64,
+            (index + 1) as f64 / count as f64,
+          );
+
+          hermite_segment(
+            start * duration_s,
+            (end - start) * duration_s,
+            (value(start), slope(start)),
+            (value(end), slope(end)),
+          )
+        })
+        .collect::<Vec<_>>();
+
+      let fits = segments.iter().enumerate().all(|(index, segment)| {
+        (1..8).all(|step| {
+          // LINT: Small counts, exact as `f64`.
+          #[allow(clippy::cast_precision_loss)]
+          let progress =
+            (index as f64 + f64::from(step) / 8.0) / count as f64;
+
+          (segment.value_at(progress * duration_s) - value(progress)).abs()
+            <= f64::from(max_error)
+        })
+      });
+
+      if fits || count >= MAX_SEGMENTS {
+        return segments;
+      }
+
+      count *= 2;
+    }
+  }
+}
+
+/// Builds the cubic through two points with given slopes (a Hermite
+/// spline), over `length` seconds from `begin`.
+fn hermite_segment(
+  begin: f64,
+  length: f64,
+  (start, start_slope): (f64, f64),
+  (end, end_slope): (f64, f64),
+) -> CubicSegment {
+  let quadratic = (3.0 * (end - start)
+    - (2.0 * start_slope + end_slope) * length)
+    / (length * length);
+  let cubic = (2.0 * (start - end) + (start_slope + end_slope) * length)
+    / (length * length * length);
+
+  // LINT: Coefficients of on-screen values; `f32` is what compositors
+  // take.
+  #[allow(clippy::cast_possible_truncation)]
+  CubicSegment {
+    begin,
+    constant: start as f32,
+    linear: start_slope as f32,
+    quadratic: quadratic as f32,
+    cubic: cubic as f32,
+  }
+}
+
 impl Default for Easing {
   fn default() -> Self {
     Self::Preset(EasingPreset::default())
@@ -364,8 +516,8 @@ mod tests {
   fn linear_bezier_is_linear() {
     let curve = bezier([0.0, 0.0, 1.0, 1.0]);
 
-    for step in 0..=20 {
-      let x = step as f32 / 20.0;
+    for step in 0..=20_u8 {
+      let x = f32::from(step) / 20.0;
       assert!((curve.y_at(x) - x).abs() < 1e-4, "at {x}");
     }
   }
@@ -401,10 +553,12 @@ mod tests {
   #[test]
   fn overshoot_leaves_the_unit_range() {
     let overshoot = bezier([0.05, 0.9, 0.1, 1.05]);
-    assert!((0..100).any(|step| overshoot.y_at(step as f32 / 100.0) > 1.0));
+    assert!((0..100_u8)
+      .any(|step| overshoot.y_at(f32::from(step) / 100.0) > 1.0));
 
     let pull_back = bezier([0.36, 0.0, 0.66, -0.56]);
-    assert!((0..100).any(|step| pull_back.y_at(step as f32 / 100.0) < 0.0));
+    assert!((0..100_u8)
+      .any(|step| pull_back.y_at(f32::from(step) / 100.0) < 0.0));
   }
 
   #[test]
@@ -421,6 +575,70 @@ mod tests {
     assert!(CubicBezier::new([1.5, 0.0, 0.5, 1.0]).is_err());
     assert!(CubicBezier::new([0.5, 0.0, -0.1, 1.0]).is_err());
     assert!(CubicBezier::new([0.5, f32::NAN, 0.5, 1.0]).is_err());
+  }
+
+  /// Checks that segments follow the curve within `max_error`, start at
+  /// 0 s and are in order.
+  fn assert_segments_fit(
+    easing: &Easing,
+    from: f32,
+    to: f32,
+    max_error: f32,
+  ) {
+    let duration = 0.25;
+    let segments = easing.cubic_segments(from, to, duration, max_error);
+
+    assert!(segments.len() >= 8 && segments.len() <= 64);
+    assert!(segments[0].begin.abs() < f64::EPSILON);
+    assert!(segments
+      .windows(2)
+      .all(|pair| pair[0].begin < pair[1].begin));
+
+    for step in 0..=500 {
+      let seconds = duration * f64::from(step) / 500.0;
+      let segment = segments
+        .iter()
+        .rev()
+        .find(|segment| segment.begin <= seconds)
+        .expect("a segment");
+
+      let want = f64::from(from)
+        + f64::from(to - from) * easing.apply_exact(seconds / duration);
+      let got = segment.value_at(seconds);
+
+      // f32 coefficients cost a little precision over the fit.
+      assert!(
+        (got - want).abs() <= f64::from(max_error) * 1.5,
+        "{easing:?} at {seconds}: {got} vs {want}"
+      );
+    }
+  }
+
+  #[test]
+  fn segments_fit_presets_and_beziers() {
+    for preset in EasingPreset::ALL {
+      assert_segments_fit(&Easing::Preset(preset), 100.0, 1500.0, 0.5);
+    }
+
+    for points in [[0.05, 0.9, 0.1, 1.05], [0.36, 0.0, 0.66, -0.56]] {
+      assert_segments_fit(
+        &Easing::Bezier(bezier(points)),
+        -300.0,
+        900.0,
+        0.5,
+      );
+    }
+
+    // Opacity, in its own units.
+    assert_segments_fit(&Easing::default(), 0.0, 1.0, 0.002);
+  }
+
+  #[test]
+  fn zero_duration_has_no_segments() {
+    assert_eq!(
+      Easing::default().cubic_segments(0.0, 1.0, 0.0, 0.5),
+      vec![]
+    );
   }
 
   #[test]
