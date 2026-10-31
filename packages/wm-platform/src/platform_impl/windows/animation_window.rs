@@ -267,6 +267,8 @@ impl AnimationWindow {
     requests: &[crate::AnimationWindowRequest],
     dispatcher: &Dispatcher,
   ) -> Vec<crate::Result<Self>> {
+    let started_at = std::time::Instant::now();
+
     let pending = requests
       .iter()
       .map(|request| {
@@ -279,6 +281,14 @@ impl AnimationWindow {
       .zip(requests)
       .map(|(pending, request)| {
         let captured = pending?.wait()?;
+
+        // Captures run in parallel, so this is when this window's frame
+        // was ready, counted from when the first capture started.
+        tracing::debug!(
+          target: "glazewm::anim",
+          capture_ms = started_at.elapsed().as_secs_f64() * 1000.0,
+          "Window captured."
+        );
 
         Self::from_capture(
           context,

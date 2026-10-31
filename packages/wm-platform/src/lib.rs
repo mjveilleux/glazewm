@@ -3,6 +3,7 @@
 #![feature(iterator_try_collect)]
 
 mod animation_window;
+mod compositor;
 mod dispatcher;
 mod display;
 mod display_listener;
@@ -22,6 +23,7 @@ mod window_listener;
 pub mod test_utils;
 
 pub use animation_window::*;
+pub use compositor::*;
 pub use dispatcher::*;
 pub use display::*;
 pub use display_listener::*;

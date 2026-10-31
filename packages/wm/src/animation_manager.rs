@@ -17,6 +17,7 @@ use wm_platform::{
 };
 
 use crate::{
+  animation_stats::AnimationStats,
   models::{NativeMonitorProperties, WindowContainer},
   traits::{CommonGetters, WindowGetters},
   user_config::UserConfig,
@@ -285,6 +286,9 @@ pub struct AnimationManager {
   /// Frame rate of the running tick task, if any.
   tick_frame_rate: Option<u32>,
 
+  /// Frame timing of the running animations.
+  stats: AnimationStats,
+
   /// Whether "Displays have separate Spaces" setting is enabled.
   #[cfg(target_os = "macos")]
   displays_have_separate_spaces: bool,
@@ -310,10 +314,23 @@ impl AnimationManager {
       context: None,
       tick_task: None,
       tick_frame_rate: None,
+      stats: AnimationStats::default(),
       #[cfg(target_os = "macos")]
       displays_have_separate_spaces: dispatcher
         .displays_have_separate_spaces(),
     }
+  }
+
+  /// Marks now as when the animations about to start were asked for, to
+  /// measure how long they take to start. An earlier mark is kept until
+  /// [`AnimationManager::clear_request`].
+  pub fn mark_request(&mut self) {
+    self.stats.mark_request();
+  }
+
+  /// Forgets the mark of [`AnimationManager::mark_request`].
+  pub fn clear_request(&mut self) {
+    self.stats.clear_request();
   }
 
   /// Whether an animation is currently active for a given window.
@@ -439,6 +456,8 @@ impl AnimationManager {
     &mut self,
     dispatcher: &Dispatcher,
   ) -> anyhow::Result<()> {
+    self.stats.frame();
+
     // Fades only change the real window's opacity, which is cheap and
     // needs no compositor transaction.
     #[cfg(target_os = "windows")]
@@ -684,6 +703,7 @@ impl AnimationManager {
       },
     );
 
+    self.stats.animation_started(request.frame_rate);
     self.update_tick_rate();
   }
 
@@ -785,6 +805,7 @@ impl AnimationManager {
           overlay,
         });
 
+        self.stats.animation_started(frame_rate);
         self.update_tick_rate();
       }
       Some(Err(err)) => {
@@ -847,6 +868,7 @@ impl AnimationManager {
           dispatcher,
         ) {
           Ok(()) => {
+            self.stats.animation_started(slide.clock.frame_rate);
             self.slides.insert(window_id, slide);
             started.insert(window_id);
           }
@@ -896,6 +918,7 @@ impl AnimationManager {
             // Start the clock once the overlay is up, so captures don't
             // eat into the animation.
             slide.clock.start_time = Instant::now();
+            self.stats.animation_started(slide.clock.frame_rate);
             self.windows.insert(window.id(), overlay);
             self.slides.insert(window.id(), slide);
             started.insert(window.id());
@@ -930,6 +953,7 @@ impl AnimationManager {
       },
     );
 
+    self.stats.animation_started(frame_rate);
     self.update_tick_rate();
   }
 
@@ -1032,6 +1056,7 @@ impl AnimationManager {
     self.tick_frame_rate = frame_rate;
 
     let Some(frame_rate) = frame_rate else {
+      self.stats.idle();
       return;
     };
 

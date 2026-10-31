@@ -35,6 +35,7 @@ use crate::{
 };
 
 mod animation_manager;
+mod animation_stats;
 mod commands;
 mod events;
 mod ipc_server;

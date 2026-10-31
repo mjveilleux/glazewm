@@ -29,6 +29,17 @@ pub fn platform_sync(
   // Any sync takes along the changes a settle was holding back.
   state.settle_deadline = None;
 
+  // Animations this sync starts were asked for now, or when a settle
+  // began holding the sync back.
+  state.animation_manager.mark_request();
+  let result = sync(state, config);
+  state.animation_manager.clear_request();
+
+  result
+}
+
+/// Implements [`platform_sync`].
+fn sync(state: &mut WmState, config: &UserConfig) -> anyhow::Result<()> {
   let focused_container =
     state.focused_container().context("No focused container.")?;
 

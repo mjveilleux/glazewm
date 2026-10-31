@@ -4,6 +4,7 @@
 extern crate libtest_mimic_collect;
 
 mod animation_window;
+mod compositor;
 mod dispatcher;
 mod display;
 mod error;
@@ -18,6 +19,7 @@ mod thread_bound;
 mod window_listener;
 
 pub use animation_window::*;
+pub use compositor::*;
 pub use dispatcher::*;
 pub use display::*;
 pub use error::*;

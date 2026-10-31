@@ -153,6 +153,8 @@ impl WindowManager {
       if state.settle_deadline.is_some() {
         // Synced with the rest when the settle ends.
       } else if Self::should_settle(state, config) {
+        // The settle counts towards how long its animations take to start.
+        state.animation_manager.mark_request();
         state.settle_deadline = Some(Instant::now() + SETTLE_DELAY);
       } else {
         platform_sync(state, config)?;
@@ -383,12 +385,14 @@ impl WindowManager {
                 })
                 .unwrap_or(60);
 
+              state.animation_manager.mark_request();
               state.animation_manager.start_close(
                 &window,
                 config,
                 frame_rate,
                 &state.dispatcher,
               );
+              state.animation_manager.clear_request();
             }
 
             // Window handle might no longer be valid here.
