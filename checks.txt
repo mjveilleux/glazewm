@@ -1,0 +1,33 @@
+close overlay up right after the close command: True
+animation overlays left: 0
+notepad pid 8376 at (510,10)-(1021,717) layered=True alpha=255
+  visible (517,10) 497x700, layout (517,10) 497x700: exact
+notepad pid 8512 at (3,10)-(1021,717) layered=True alpha=255
+  visible (10,10) 1004x700, layout (10,10) 1004x700: exact
+
+timing (ms; reported, not checked)
+  start (asked for to first frame): min 1.8, median 206.6, max 533.7 (n=25)
+  window capture: min 71.2747, median 164.5847, max 347.8989 (n=32)
+  compositor frames during each run (what is seen): frames | interval mean / p95 / max | late (>1.5 periods) | period
+    17 | 34.6 / 63.1 / 63.1 | 16 | 15.6
+    15 | 44.6 / 62.7 / 62.7 | 14 | 15.6
+    16 | 39.4 / 47.4 / 47.4 | 15 | 15.6
+    22 | 41.3 / 49.4 / 63.0 | 21 | 15.6
+    15 | 39.3 / 58.8 / 58.8 | 14 | 15.6
+    15 | 41.4 / 76.9 / 76.9 | 14 | 15.6
+    27 | 40.1 / 64.1 / 77.5 | 21 | 15.6
+    15 | 41.5 / 62.7 / 62.7 | 13 | 15.6
+    11 | 62.2 / 139.3 / 139.3 | 10 | 15.6
+    26 | 52.5 / 92.9 / 93.6 | 25 | 15.6
+  longest run: 27 frames, interval mean 40.1 / p95 64.1 / max 77.5 ms, 21 late, period 15.6 ms
+  WM ticks during each run (0 frames: the compositor played it alone): frames | interval mean / p95 / max | late | period | duration | dwm composed / expected, dropped
+    15 | 35.1 / 63.1 / 63.1 | 14 | 15.6 | 1038.8 | 1 / 66, 0
+    14 | 44.4 / 62.7 / 62.7 | 13 | 15.6 | 945.6 | 1 / 61, 0
+    15 | 40.0 / 47.4 / 47.4 | 14 | 15.6 | 1054.4 | 1 / 67, 0
+    0 |  /  /  |  | 15.6 | 1008.3 | 1 / 65, 0
+    0 |  /  /  |  | 15.6 | 761.8 | 1 / 49, 0
+    14 | 40.9 / 76.9 / 76.9 | 13 | 15.6 | 1023.8 | 1 / 66, 0
+    16 | 37.6 / 77.5 / 77.5 | 10 | 15.6 | 1244.0 | 1 / 80, 0
+    0 |  /  /  |  | 15.6 | 818.8 | 1 / 52, 0
+    10 | 55.5 / 77.9 / 77.9 | 9 | 15.6 | 842.5 | 1 / 54, 0
+    25 | 53.3 / 91.5 / 108.4 | 23 | 15.6 | 1761.0 | 1 / 113, 0

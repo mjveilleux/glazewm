@@ -1,0 +1,17 @@
+3289	start glazewm
+3843	glazewm ready
+5140	open notepad 1
+7197	open notepad 2
+9236	open notepad 3
+11266	close notepad 2
+11398	close overlays up: 1
+13420	move window left
+15625	open notepad 4 and move it while opening
+18082	kill notepad 4 mid-slide
+20522	reload config mid-slide
+22981	move window to workspace 2
+25212	switch to workspace 2
+25831	switch to workspace 1
+26091	switch to workspace 3
+26335	switch to workspace 1
+28611	done
