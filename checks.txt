@@ -1,0 +1,6 @@
+close overlay up right after the close command: True
+animation overlays left: 0
+notepad pid 5620 at (341,10)-(683,717) layered=True alpha=255
+  frame (348,10,676,710), GlazeWM's place (348,10,676,710): off by 0 px
+notepad pid 6444 at (679,10)-(1021,717) layered=True alpha=255
+  frame (686,10,1014,710), GlazeWM's place (686,10,1014,710): off by 0 px

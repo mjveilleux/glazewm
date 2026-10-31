@@ -1,0 +1,23 @@
+general:
+  hide_method: 'cloak'
+gaps:
+  inner_gap: '10px'
+  outer_gap: { top: '10px', right: '10px', bottom: '10px', left: '10px' }
+workspaces:
+  - name: '1'
+  - name: '2'
+animations:
+  enabled: true
+  window_close:
+    effect_type: 'popin'
+    duration_ms: 480
+    easing: 'ease_out_quint'
+  window_move:
+    effect_type: 'slide'
+    duration_ms: 600
+    easing: 'ease_out_quint'
+    trigger_threshold: '10px'
+  window_open:
+    effect_type: 'fade'
+    duration_ms: 600
+    easing: 'ease_out_cubic'
