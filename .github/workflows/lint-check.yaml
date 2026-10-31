@@ -38,3 +38,10 @@ jobs:
       # Clippy itself runs `cargo check`, so this will also check for compilation errors.
       - name: Check linting (clippy)
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # Unit tests. wm-platform's own suite drives the real desktop, so it
+      # only runs its unit tests.
+      - name: Unit tests
+        run: |
+          cargo test -p wm-common -p wm
+          cargo test -p wm-platform --lib

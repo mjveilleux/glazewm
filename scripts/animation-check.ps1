@@ -19,7 +19,9 @@
 
     One Notepad is closed with GlazeWM's close command, the close animation's only trigger: its
     snapshot must be up right after the command and gone once the animation has had its time.
-    With -Disabled the config says animations.enabled: false, and no overlay may appear at all.
+    With -Disabled the config says animations.enabled: false, and no overlay may appear at all;
+    that run also uses the deprecated keys (window_open, window_close, window_move), which must
+    still load.
 #>
 param(
     [string]$Bin = 'target\release',
@@ -41,7 +43,39 @@ $Out = (Resolve-Path $Out).Path
 $glazewm = (Resolve-Path "$Bin\glazewm.exe").Path
 $cli = (Resolve-Path "$Bin\glazewm-cli.exe").Path
 
-# Animations only, everything else default; slowed so each one spans many frames.
+# Animations only, everything else default; slowed so each one spans many frames. The run with
+# animations off uses the deprecated keys, which must still load.
+if ($Disabled) {
+    $animations = @"
+animations:
+  enabled: false
+  window_close: { effect_type: 'popin', duration_ms: $CloseMs }
+  window_move: { effect_type: 'slide', duration_ms: $DurationMs, trigger_threshold: '10px' }
+  window_open: { effect_type: 'fade', duration_ms: $OpenMs }
+"@
+} else {
+    $animations = @"
+animations:
+  enabled: true
+  beziers:
+    # Overshoots its target a little before settling, to show in the sheets.
+    overshoot: [0.05, 0.9, 0.1, 1.05]
+  windows:
+    duration_ms: $DurationMs
+    easing: 'ease_out_quint'
+  windows_in:
+    style: 'fade'
+    duration_ms: $OpenMs
+    easing: 'ease_out_cubic'
+  windows_out:
+    style: 'popin'
+    duration_ms: $CloseMs
+  windows_move:
+    style: 'slide'
+    easing: 'overshoot'
+    trigger_threshold: '10px'
+"@
+}
 $config = Join-Path $Out 'config.yaml'
 @"
 general:
@@ -52,21 +86,7 @@ gaps:
 workspaces:
   - name: '1'
   - name: '2'
-animations:
-  enabled: $(if ($Disabled) { 'false' } else { 'true' })
-  window_close:
-    effect_type: 'popin'
-    duration_ms: $CloseMs
-    easing: 'ease_out_quint'
-  window_move:
-    effect_type: 'slide'
-    duration_ms: $DurationMs
-    easing: 'ease_out_quint'
-    trigger_threshold: '10px'
-  window_open:
-    effect_type: 'fade'
-    duration_ms: $OpenMs
-    easing: 'ease_out_cubic'
+$animations
 "@ | Set-Content $config -Encoding utf8
 
 $start = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
