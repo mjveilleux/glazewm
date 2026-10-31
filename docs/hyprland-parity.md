@@ -122,13 +122,33 @@ README animation section and sample config with a Hyprland-like preset. Platform
 
 ## 6. Progress
 
-Timings are from the `animation-check` workflow (slowed run, 600 ms animations), on GitHub's Windows runner.
+### Timing, before and after
+
+From the `animation-check` workflow's slowed run (600 ms animations) on GitHub's Windows Server 2025 runner, which has no GPU: its compositor manages 25–30 frames a second at best, so no code reaches a 16.7 ms frame there. "Before" is the code this branch started from, with Phase 0's measurements added (`claude/hyprland-parity-baseline`); both are recorded the same way (ffmpeg only).
+
+| | Before | After (Phase 3) |
+|---|---|---|
+| compositor frame interval during animations, mean | 32–41 ms | 24–35 ms |
+| compositor frame interval, p95 | 48–62 ms | 47–58 ms |
+| WM ticks during a slide or close | 37–51, at 64 Hz, one 285 ms hitch | 0: the compositor plays them |
+| WM ticks during fades and live moves | 64 Hz timer | one per compositor frame |
+| window capture | 76–231 ms | 93–416 ms (more windows per step: workspace switches) |
+| start, asked for to first frame | 159–430 ms | 34–1012 ms (the long ones are workspace switches capturing four windows on a CPU-only runner) |
+
+What the runner can't show: on a machine with a GPU, the compositor runs at the display's rate and plays snapshot animations with no work from the WM, so their frames are as even as the display's. The p95 target (≈ one refresh period) can only be checked there; CI checks what's the same on any machine.
+
+### Phases
 
 | Phase | Status | Notes |
 |---|---|---|
-| 0 | code done; baseline pending | `glazewm::anim` logs start latency, capture latency, frame intervals (mean / p95 / max / late) and DWM's composed / dropped frames per run. `checks.txt` gets the timing table and an exact-final-frame check. The baseline needs the `animation-check` workflow, which is disabled in the repo's Actions settings. |
-| 1 | code done; CI pending | Cubic beziers (baked, overshoot allowed), the node tree with inheritance, fade nodes for opacity, deprecated keys mapped in, ≥ 1 px clamp, Windows' Animation effects setting followed. Unit tests run in the lint workflow. |
-| 2–7 | not started | Blocked on the `animation-check` workflow: every later phase's acceptance is measured there. |
+| 0 | done | `glazewm::anim` logs start and capture latency, WM tick intervals, and (a probe thread on `DwmFlush`) the compositor's own frame intervals. `checks.txt` has the table; the check fails only on leftover overlays, transparent windows, or windows not exactly in place. The runner's DWM frame counter barely moves, so the probe is what's reported. |
+| 1 | done | Beziers (baked, overshoot allowed, x outside [0, 1] refused), the node tree with inheritance and errors naming the key, fade nodes for opacity, deprecated keys mapped in with one warning, ≥ 1 px clamp, Windows' Animation effects setting followed. |
+| 2 | done (p95 needs a GPU) | Slides and closes are DirectComposition animations fitted to the curve (8–64 cubic segments, < 0.5 px), started on the frame the compositor reports, ending on a held last frame; the WM wakes once per animation. Fades and live moves tick on `DwmFlush`. `Visual3::SetOpacity` works on the desktop device, so no `DCompositionCreateDevice3`. Live moves stay one async `SetWindowPos` per window rather than `DeferWindowPos`, which is synchronous: one hung app would stall the WM. |
+| 3 | done | Workspace transitions (`slide`, `slidevert`, `fade`, `slidefade`), captured live per the spike; rapid switches turn running slides around. CI switches 1→2→1→3→1 faster than a switch takes: direction right, no overlay left, every window opaque and in place. |
+| 4 | done | Snapshot `popin` and `gnomed` in and out (`live: true` for the old live popin), captured once placed; the open settle ends once new windows have drawn; a window closed by its app mid-slide plays the close animation from its snapshot; finished slides crossfade (70 ms) into the window; maximized, fullscreen and uncapturable windows move at once. |
+| 5 | done; dim dropped | The focus border's color animates between the `window_effects` colors on the pacer thread. `dim_inactive` dropped after the spike (section 7). Gradient borders out of scope. |
+| 6 | done, but for monitors | CI interrupts animations: a window moved while opening, killed mid-slide, the config reloaded mid-slide, workspaces switched mid-switch. Unit tests cover curves, config, clocks and switch geometry. The watcher restores windows hidden on show if the WM dies; a lost GPU device is replaced. Multi-monitor and mixed DPI aren't covered in CI: the runner has one display, and adding virtual ones needs a driver installed. |
+| 7 | done | README section and sample config; platform-agnostic logic in `wm` and the curve math in `wm-platform`'s models, Windows code behind `platform_impl`. |
 
 ## 7. Spike findings
 
