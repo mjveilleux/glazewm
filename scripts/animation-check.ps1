@@ -17,6 +17,9 @@
     What fails a run is always the same on any machine: an overlay left behind, a window left
     transparent, or a window that isn't exactly where GlazeWM's layout puts it.
 
+    Workspaces switch 1, 2, 1, 3, 1 faster than a switch takes, so each turns the last around;
+    afterwards no overlay may be left and every window must be opaque and in place.
+
     One Notepad is closed with GlazeWM's close command, the close animation's only trigger: its
     snapshot must be up right after the command and gone once the animation has had its time.
     With -Disabled the config says animations.enabled: false, and no overlay may appear at all;
@@ -74,6 +77,9 @@ animations:
     style: 'slide'
     easing: 'overshoot'
     trigger_threshold: '10px'
+  workspaces:
+    style: 'slide'
+    duration_ms: $DurationMs
 "@
 }
 $config = Join-Path $Out 'config.yaml'
@@ -86,6 +92,7 @@ gaps:
 workspaces:
   - name: '1'
   - name: '2'
+  - name: '3'
 $animations
 "@ | Set-Content $config -Encoding utf8
 
@@ -249,6 +256,22 @@ Write-Event 'move window left'
 & $cli command move --direction left | Out-Null
 Start-Sleep -Seconds $pause
 Save-State 'move'
+
+# The focused Notepad goes to workspace 2, then the workspaces switch 1, 2, 1, 3, 1, each switch
+# coming before the last one is over, so every one turns the running slides around.
+Write-Event 'move window to workspace 2'
+& $cli command move --workspace 2 | Out-Null
+Start-Sleep -Seconds $pause
+Save-State 'to-workspace-2'
+
+$gap = [Math]::Max(50, [int]($DurationMs / 3))
+foreach ($workspace in '2', '1', '3', '1') {
+    Write-Event "switch to workspace $workspace"
+    & $cli command focus --workspace $workspace | Out-Null
+    Start-Sleep -Milliseconds $gap
+}
+Start-Sleep -Seconds $pause
+Save-State 'switches'
 
 Write-Event 'done'
 $rec | Wait-Process -Timeout 40 -ErrorAction SilentlyContinue
