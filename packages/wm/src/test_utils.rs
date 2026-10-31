@@ -58,6 +58,7 @@ impl Monitor {
     #[builder(default = mock_working_area())] working_area: Rect,
     #[builder(default = MOCK_DPI)] dpi: u32,
     #[builder(default = MOCK_SCALE_FACTOR)] scale_factor: f32,
+    refresh_rate: Option<u32>,
     #[builder(default = Display::mock())] native: Display,
     #[builder(default = vec![])] workspaces: Vec<Workspace>,
   ) -> Self {
@@ -67,6 +68,7 @@ impl Monitor {
       .working_area(working_area)
       .dpi(dpi)
       .scale_factor(scale_factor)
+      .maybe_refresh_rate(refresh_rate)
       .call();
 
     let monitor = Self::new(native, properties);
@@ -89,6 +91,7 @@ impl NativeMonitorProperties {
     #[builder(default = mock_working_area())] working_area: Rect,
     #[builder(default = MOCK_DPI)] dpi: u32,
     #[builder(default = MOCK_SCALE_FACTOR)] scale_factor: f32,
+    refresh_rate: Option<u32>,
   ) -> Self {
     Self {
       device_name,
@@ -96,6 +99,7 @@ impl NativeMonitorProperties {
       working_area,
       dpi,
       scale_factor,
+      refresh_rate,
       #[cfg(target_os = "macos")]
       device_uuid: String::new(),
       #[cfg(target_os = "windows")]
