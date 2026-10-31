@@ -52,6 +52,12 @@ fn at_least_one_pixel(rect: &Rect) -> Rect {
   )
 }
 
+/// How long a finished slide's snapshot takes to fade into the real
+/// window (see `AnimationManager::end_animation`).
+// LINT: Crossfades only run on Windows.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const CROSSFADE: Duration = Duration::from_millis(70);
+
 pub enum AnimationTrigger {
   WindowOpened,
   WindowMoved,
@@ -504,6 +510,91 @@ impl AnimationManager {
         }
       });
     }
+  }
+
+  /// Ends the window's animation as its window is placed for good: a
+  /// finished slide's snapshot fades out over the real window (already
+  /// redrawn beneath it at its place), hiding the app's own redraw at its
+  /// new size. Any other animation is cancelled.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Same as [`AnimationManager::cancel_animation`].
+  // LINT: `dispatcher` is only used on Windows.
+  #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+  pub fn end_animation(
+    &mut self,
+    window_id: &Uuid,
+    dispatcher: &Dispatcher,
+  ) {
+    let finished_slide = self
+      .slides
+      .get(window_id)
+      .is_some_and(|slide| slide.clock.is_complete());
+
+    #[cfg(target_os = "windows")]
+    if finished_slide {
+      if let (Some(slide), Some(overlay)) = (
+        self.slides.remove(window_id),
+        self.windows.remove(window_id),
+      ) {
+        self.update_ticking();
+        self.crossfade(overlay, &slide.target_rect, dispatcher);
+        return;
+      }
+    }
+
+    self.cancel_animation(window_id);
+  }
+
+  /// Fades a finished slide's snapshot out at `rect`, then destroys it.
+  /// If it can't fade, it's destroyed as in `cancel_animation`.
+  #[cfg(target_os = "windows")]
+  fn crossfade(
+    &self,
+    overlay: AnimationWindow,
+    rect: &Rect,
+    dispatcher: &Dispatcher,
+  ) {
+    let curve = AnimationCurve {
+      duration: CROSSFADE,
+      easing: Easing::default(),
+    };
+
+    let animation = OverlayAnimation {
+      rect: AnimatedValue {
+        from: rect.clone(),
+        to: rect.clone(),
+        curve: curve.clone(),
+      },
+      opacity: Some(AnimatedValue {
+        from: OpacityValue(1.0),
+        to: OpacityValue(0.0),
+        curve,
+      }),
+      scale: None,
+    };
+
+    let faded = self.context.as_ref().is_some_and(|context| {
+      context
+        .transaction(|| overlay.animate(&animation), dispatcher)
+        .and_then(|result| result)
+        .inspect_err(|err| tracing::debug!("Failed to crossfade: {err}"))
+        .is_ok()
+    });
+
+    let keep_for = if faded {
+      CROSSFADE + Duration::from_millis(20)
+    } else {
+      Duration::from_millis(20)
+    };
+
+    std::thread::spawn(move || {
+      std::thread::sleep(keep_for);
+      if let Err(err) = overlay.destroy() {
+        tracing::warn!("Failed to destroy animation window: {err}");
+      }
+    });
   }
 
   /// Stops any animation of the window and forgets it entirely.

@@ -311,12 +311,16 @@ fn redraw_containers(
     );
 
     // Hidden windows and syncs that skip animations (e.g. workspace
-    // switches) stop any running animation; the window then jumps
-    // straight to its target.
-    let animation_plan = if state.pending_sync.should_skip_animations()
-      || !is_visible
-    {
+    // switches, or ending finished animations) stop any running
+    // animation; the window then jumps straight to its target. A visible
+    // window whose slide is over gets the slide's snapshot faded into it.
+    let animation_plan = if !is_visible {
       state.animation_manager.cancel_animation(&window.id());
+      None
+    } else if state.pending_sync.should_skip_animations() {
+      state
+        .animation_manager
+        .end_animation(&window.id(), &state.dispatcher);
       None
     } else {
       let animation_trigger =
