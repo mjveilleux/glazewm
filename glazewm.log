@@ -1,0 +1,74 @@
+[2m2026-10-31T07:10:50.251473Z[0m [32m INFO[0m [2mglazewm[0m[2m:[0m Starting WM with log level "INFO".
+[2m2026-10-31T07:10:50.265617Z[0m [32m INFO[0m [2mglazewm::commands::monitor::add_monitor[0m[2m:[0m Monitor added: Monitor(device_name=\\.\DISPLAY1)
+[2m2026-10-31T07:10:50.266180Z[0m [32m INFO[0m [2mglazewm::commands::workspace::activate_workspace[0m[2m:[0m Activating workspace: Workspace(name=1, tiling_direction=Horizontal)
+[2m2026-10-31T07:10:50.266913Z[0m [32m INFO[0m [2mglazewm::commands::window::manage_window[0m[2m:[0m New window managed: Window(id=WindowId(131418), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=C:\ProgramData\Gi...)
+[2m2026-10-31T07:10:50.267310Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Setting focus to window: Window(id=WindowId(131418), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=C:\ProgramData\Gi...)
+[2m2026-10-31T07:10:50.284372Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m IPC server started on: '127.0.0.1:6123'.
+[2m2026-10-31T07:10:50.286524Z[0m [33m WARN[0m [2mglazewm[0m[2m:[0m Failed to start watcher process: Failed to start watcher process.
+[2m2026-10-31T07:10:50.817225Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m Incoming IPC connection from: 127.0.0.1:63525.
+[2m2026-10-31T07:10:50.818180Z[0m [32m INFO[0m [2mglazewm[0m[2m:[0m Received IPC message: "query monitors"
+[2m2026-10-31T07:10:50.819436Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m IPC disconnection from: 127.0.0.1:63525.
+[2m2026-10-31T07:10:50.820130Z[0m [33m WARN[0m [2mglazewm::ipc_server[0m[2m:[0m Failed to broadcast disconnection: channel closed
+[2m2026-10-31T07:10:50.820713Z[0m [33m WARN[0m [2mglazewm::ipc_server[0m[2m:[0m Error handling connection: WebSocket error: WebSocket protocol error: Connection reset without closing handshake
+[2m2026-10-31T07:10:50.917313Z[0m [32m INFO[0m [2mglazewm::commands::window::manage_window[0m[2m:[0m New window managed: Window(id=WindowId(196730), process=notepad, class=Notepad, title=Untitled - Notepad)
+[2m2026-10-31T07:10:50.922762Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Setting focus to window: Window(id=WindowId(196730), process=notepad, class=Notepad, title=Untitled - Notepad)
+[2m2026-10-31T07:10:50.933883Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Updating window z-order: Window(id=WindowId(131418), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=C:\ProgramData\Gi...)
+[2m2026-10-31T07:10:50.934468Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Updating window z-order: Window(id=WindowId(196730), process=notepad, class=Notepad, title=Untitled - Notepad)
+[2m2026-10-31T07:10:51.484835Z[0m [32m INFO[0m [2mglazewm::commands::window::manage_window[0m[2m:[0m New window managed: Window(id=WindowId(589842), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=PowerShell)
+[2m2026-10-31T07:10:51.491934Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Setting focus to window: Window(id=WindowId(589842), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=PowerShell)
+[2m2026-10-31T07:10:51.648462Z[0m [33m WARN[0m [2mwm_platform::platform_impl::platform::native_window[0m[2m:[0m Failed to get window's frame position. Falling back to border position.
+[2m2026-10-31T07:10:51.648794Z[0m [33m WARN[0m [2mwm_platform::platform_impl::platform::native_window[0m[2m:[0m Failed to get window's frame position. Falling back to border position.
+[2m2026-10-31T07:10:51.674976Z[0m [32m INFO[0m [2mglazewm::events::handle_window_title_changed[0m[2m:[0m Window title changed: Window(id=WindowId(589842), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=PowerShell)
+[2m2026-10-31T07:10:52.363710Z[0m [32m INFO[0m [2mglazewm::commands::window::manage_window[0m[2m:[0m New window managed: Window(id=WindowId(66060), process=msedge, class=Chrome_WidgetWin_1, title=Untitled - [InPri...)
+[2m2026-10-31T07:10:52.364436Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Setting focus to window: Window(id=WindowId(66060), process=msedge, class=Chrome_WidgetWin_1, title=Untitled - [InPri...)
+[2m2026-10-31T07:10:52.473367Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Updating window z-order: Window(id=WindowId(131418), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=C:\ProgramData\Gi...)
+[2m2026-10-31T07:10:52.478805Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Updating window z-order: Window(id=WindowId(196730), process=notepad, class=Notepad, title=Untitled - Notepad)
+[2m2026-10-31T07:10:52.496635Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Updating window z-order: Window(id=WindowId(589842), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=Administrator: Po...)
+[2m2026-10-31T07:10:52.497515Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Updating window z-order: Window(id=WindowId(66060), process=msedge, class=Chrome_WidgetWin_1, title=Untitled - [InPri...)
+[2m2026-10-31T07:10:52.499462Z[0m [33m WARN[0m [2mwm_platform::platform_impl::platform::native_window[0m[2m:[0m Failed to get window's frame position. Falling back to border position.
+[2m2026-10-31T07:10:52.500435Z[0m [33m WARN[0m [2mwm_platform::platform_impl::platform::native_window[0m[2m:[0m Failed to get window's frame position. Falling back to border position.
+[2m2026-10-31T07:10:54.575069Z[0m [32m INFO[0m [2mglazewm::events::handle_window_title_changed[0m[2m:[0m Window title changed: Window(id=WindowId(66060), process=msedge, class=Chrome_WidgetWin_1, title=Untitled - [InPri...)
+[2m2026-10-31T07:10:59.231191Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m Incoming IPC connection from: 127.0.0.1:51741.
+[2m2026-10-31T07:10:59.231840Z[0m [32m INFO[0m [2mglazewm[0m[2m:[0m Received IPC message: "query windows"
+[2m2026-10-31T07:10:59.232714Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m IPC disconnection from: 127.0.0.1:51741.
+[2m2026-10-31T07:10:59.233067Z[0m [33m WARN[0m [2mglazewm::ipc_server[0m[2m:[0m Failed to broadcast disconnection: channel closed
+[2m2026-10-31T07:10:59.233449Z[0m [33m WARN[0m [2mglazewm::ipc_server[0m[2m:[0m Error handling connection: WebSocket error: WebSocket protocol error: Connection reset without closing handshake
+[2m2026-10-31T07:11:06.702762Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m Incoming IPC connection from: 127.0.0.1:51595.
+[2m2026-10-31T07:11:06.703324Z[0m [32m INFO[0m [2mglazewm[0m[2m:[0m Received IPC message: "command focus --workspace 2"
+[2m2026-10-31T07:11:06.703944Z[0m [32m INFO[0m [2mglazewm::commands::workspace::activate_workspace[0m[2m:[0m Activating workspace: Workspace(name=2, tiling_direction=Horizontal)
+[2m2026-10-31T07:11:06.704209Z[0m [32m INFO[0m [2mglazewm::commands::workspace::focus_workspace[0m[2m:[0m Focusing workspace: Workspace(name=2, tiling_direction=Horizontal)
+[2m2026-10-31T07:11:06.704479Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Setting focus to the desktop window.
+[2m2026-10-31T07:11:06.738531Z[0m [32m INFO[0m [2mglazewm::events::handle_window_hidden[0m[2m:[0m Window hidden: Window(id=WindowId(131418), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=C:\ProgramData\Gi...)
+[2m2026-10-31T07:11:06.738988Z[0m [32m INFO[0m [2mglazewm::events::handle_window_hidden[0m[2m:[0m Window hidden: Window(id=WindowId(196730), process=notepad, class=Notepad, title=Untitled - Notepad)
+[2m2026-10-31T07:11:06.739483Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m IPC disconnection from: 127.0.0.1:51595.
+[2m2026-10-31T07:11:06.739583Z[0m [32m INFO[0m [2mglazewm::events::handle_window_hidden[0m[2m:[0m Window hidden: Window(id=WindowId(589842), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=Administrator: Po...)
+[2m2026-10-31T07:11:06.739905Z[0m [33m WARN[0m [2mglazewm::ipc_server[0m[2m:[0m Failed to broadcast disconnection: channel closed
+[2m2026-10-31T07:11:06.740598Z[0m [32m INFO[0m [2mglazewm::events::handle_window_hidden[0m[2m:[0m Window hidden: Window(id=WindowId(66060), process=msedge, class=Chrome_WidgetWin_1, title=about:blank - [In...)
+[2m2026-10-31T07:11:06.740890Z[0m [33m WARN[0m [2mglazewm::ipc_server[0m[2m:[0m Error handling connection: WebSocket error: WebSocket protocol error: Connection reset without closing handshake
+[2m2026-10-31T07:11:07.999106Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m Incoming IPC connection from: 127.0.0.1:51596.
+[2m2026-10-31T07:11:07.999772Z[0m [32m INFO[0m [2mglazewm[0m[2m:[0m Received IPC message: "command focus --workspace 1"
+[2m2026-10-31T07:11:08.000216Z[0m [32m INFO[0m [2mglazewm::commands::workspace::focus_workspace[0m[2m:[0m Focusing workspace: Workspace(name=1, tiling_direction=Horizontal)
+[2m2026-10-31T07:11:08.000453Z[0m [32m INFO[0m [2mglazewm::commands::workspace::deactivate_workspace[0m[2m:[0m Deactivating workspace: Workspace(name=2, tiling_direction=Horizontal)
+[2m2026-10-31T07:11:08.000687Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Setting focus to window: Window(id=WindowId(66060), process=msedge, class=Chrome_WidgetWin_1, title=about:blank - [In...)
+[2m2026-10-31T07:11:08.042672Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Updating window z-order: Window(id=WindowId(131418), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=C:\ProgramData\Gi...)
+[2m2026-10-31T07:11:08.043353Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Updating window z-order: Window(id=WindowId(196730), process=notepad, class=Notepad, title=Untitled - Notepad)
+[2m2026-10-31T07:11:08.043934Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Updating window z-order: Window(id=WindowId(589842), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=Administrator: Po...)
+[2m2026-10-31T07:11:08.044798Z[0m [32m INFO[0m [2mglazewm::commands::general::platform_sync[0m[2m:[0m Updating window z-order: Window(id=WindowId(66060), process=msedge, class=Chrome_WidgetWin_1, title=about:blank - [In...)
+[2m2026-10-31T07:11:08.045584Z[0m [32m INFO[0m [2mglazewm::events::handle_window_shown[0m[2m:[0m Window shown: Window(id=WindowId(131418), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=C:\ProgramData\Gi...)
+[2m2026-10-31T07:11:08.046415Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m IPC disconnection from: 127.0.0.1:51596.
+[2m2026-10-31T07:11:08.048854Z[0m [33m WARN[0m [2mglazewm::ipc_server[0m[2m:[0m Failed to broadcast disconnection: channel closed
+[2m2026-10-31T07:11:08.049119Z[0m [32m INFO[0m [2mglazewm::events::handle_window_shown[0m[2m:[0m Window shown: Window(id=WindowId(196730), process=notepad, class=Notepad, title=Untitled - Notepad)
+[2m2026-10-31T07:11:08.049380Z[0m [33m WARN[0m [2mglazewm::ipc_server[0m[2m:[0m Error handling connection: WebSocket error: WebSocket protocol error: Connection reset without closing handshake
+[2m2026-10-31T07:11:08.049745Z[0m [32m INFO[0m [2mglazewm::events::handle_window_shown[0m[2m:[0m Window shown: Window(id=WindowId(589842), process=WindowsTerminal, class=CASCADIA_HOSTING_WINDOW_CLASS, title=Administrator: Po...)
+[2m2026-10-31T07:11:08.051262Z[0m [32m INFO[0m [2mglazewm::events::handle_window_shown[0m[2m:[0m Window shown: Window(id=WindowId(66060), process=msedge, class=Chrome_WidgetWin_1, title=about:blank - [In...)
+[2m2026-10-31T07:11:10.038999Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m Incoming IPC connection from: 127.0.0.1:51597.
+[2m2026-10-31T07:11:10.039613Z[0m [32m INFO[0m [2mglazewm[0m[2m:[0m Received IPC message: "command wm-exit"
+[2m2026-10-31T07:11:10.040077Z[0m [32m INFO[0m [2mglazewm[0m[2m:[0m Exiting through WM command.
+[2m2026-10-31T07:11:10.040320Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m IPC disconnection from: 127.0.0.1:51597.
+[2m2026-10-31T07:11:10.040643Z[0m [33m WARN[0m [2mglazewm::ipc_server[0m[2m:[0m Failed to broadcast disconnection: channel closed
+[2m2026-10-31T07:11:10.040353Z[0m [32m INFO[0m [2mglazewm[0m[2m:[0m Window manager shutting down.
+[2m2026-10-31T07:11:10.041015Z[0m [33m WARN[0m [2mglazewm::ipc_server[0m[2m:[0m Error handling connection: WebSocket error: WebSocket protocol error: Connection reset without closing handshake
+[2m2026-10-31T07:11:10.041175Z[0m [32m INFO[0m [2mglazewm::wm[0m[2m:[0m Emitting WM event before shutting down: ApplicationExiting
+[2m2026-10-31T07:11:10.050422Z[0m [32m INFO[0m [2mglazewm::ipc_server[0m[2m:[0m Shutting down IPC server.
+[2m2026-10-31T07:11:10.072192Z[0m [32m INFO[0m [2mwm_platform::platform_impl::platform::event_loop[0m[2m:[0m Event loop thread exiting.
+[2m2026-10-31T07:11:10.093899Z[0m [32m INFO[0m [2mwm_platform::platform_impl::platform::event_loop[0m[2m:[0m Shutting down event loop.

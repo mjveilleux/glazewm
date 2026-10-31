@@ -1,0 +1,24 @@
+window 131418: WindowsTerminal 'C:\ProgramData\GitHub\HostedComputeAgent\hosted-compute-agent': not layered, alpha 255
+window 196730: notepad 'Untitled - Notepad': not layered, alpha 255
+window 589842: WindowsTerminal 'Administrator: PowerShell': not layered, alpha 255
+window 66060: msedge 'about:blank - [InPrivate] - Microsoft​ Edge': not layered, alpha 255
+
+1. visible:
+   131418 class=CASCADIA_HOSTING_WINDOW_CLASS cloaked=false mode=capture: frame in 174.4 ms, 100% not blank
+   196730 class=Notepad cloaked=false mode=capture: frame in 95.5 ms, 100% not blank
+   589842 class=CASCADIA_HOSTING_WINDOW_CLASS cloaked=false mode=capture: frame in 109.9 ms, 100% not blank
+   66060 class=Chrome_WidgetWin_1 cloaked=false mode=capture: frame in 80.3 ms, 96% not blank
+2. cloaked (workspace 2 shown):
+   131418 class=CASCADIA_HOSTING_WINDOW_CLASS cloaked=true mode=capture: no frame after 42.7 ms: Could not capture the given window. (0x80070057)
+   196730 class=Notepad cloaked=true mode=capture: no frame after 33.8 ms: Could not capture the given window. (0x80070057)
+   589842 class=CASCADIA_HOSTING_WINDOW_CLASS cloaked=true mode=capture: no frame after 32.9 ms: Could not capture the given window. (0x80070057)
+   66060 class=Chrome_WidgetWin_1 cloaked=true mode=capture: no frame after 33.0 ms: Could not capture the given window. (0x80070057)
+3. transparent (workspace 1, alpha 0):
+   131418 class=CASCADIA_HOSTING_WINDOW_CLASS cloaked=false mode=transparent: frame in 95.0 ms, 100% not blank
+   196730 class=Notepad cloaked=false mode=transparent: frame in 76.6 ms, 100% not blank
+   589842 class=CASCADIA_HOSTING_WINDOW_CLASS cloaked=false mode=transparent: frame in 79.2 ms, 100% not blank
+   66060 class=Chrome_WidgetWin_1 cloaked=false mode=transparent: frame in 94.3 ms, 96% not blank
+   131418 opaque again
+   196730 opaque again
+   589842 opaque again
+   66060 opaque again

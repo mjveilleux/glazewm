@@ -1,0 +1,9 @@
+general:
+  hide_method: 'cloak'
+workspaces:
+  - name: '1'
+  - name: '2'
+# New windows animate in, so GlazeWM hides them as they're created: the apps below must still
+# open and draw normally under it.
+animations:
+  windows_in: { style: 'popin', duration_ms: 150 }
