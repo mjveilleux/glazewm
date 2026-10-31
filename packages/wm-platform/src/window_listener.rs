@@ -87,3 +87,17 @@ pub fn set_hide_windows_on_show(enabled: bool) {
 pub fn restore_windows_hidden_on_show() {
   platform_impl::hide_on_show::restore_all();
 }
+
+/// Restores every window a WM process hid on show but never took over,
+/// found by the mark it left on them.
+///
+/// For the watcher, when the WM process has died: the WM's own record of
+/// these windows died with it.
+///
+/// # Platform-specific
+///
+/// This function is only available on Windows.
+#[cfg(target_os = "windows")]
+pub fn restore_windows_hidden_by_lost_wm() {
+  platform_impl::hide_on_show::restore_marked();
+}

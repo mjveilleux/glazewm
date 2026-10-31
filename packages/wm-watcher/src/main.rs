@@ -37,6 +37,10 @@ async fn main() -> anyhow::Result<()> {
         err
       );
 
+      // New windows the WM hid the moment they were shown, to fade them
+      // in, but hadn't taken over yet.
+      wm_platform::restore_windows_hidden_by_lost_wm();
+
       let managed_windows =
         managed_handles.into_iter().map(NativeWindow::from_handle);
 
