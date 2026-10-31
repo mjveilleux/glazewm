@@ -30,7 +30,10 @@ param(
     # The fade-out of closed windows; 80% of the slides when left out (exits are quicker).
     [int]$CloseMs = 0,
     # animations.enabled: false, with every other setting kept.
-    [switch]$Disabled
+    [switch]$Disabled,
+    # Nothing recorded: on a machine without a GPU, capturing the screen slows the compositor
+    # itself, so this is the run whose timing shows the animations alone.
+    [switch]$NoRecording
 )
 $ErrorActionPreference = 'Stop'
 if ($OpenMs -le 0) { $OpenMs = $DurationMs }
@@ -135,7 +138,7 @@ Write-Event 'glazewm ready'
 # from it afterwards. Otherwise screenshots are taken in a loop. Only one of the two runs: on a
 # machine without a GPU, both together halve the frames the compositor manages.
 $ffmpeg = $null
-if ($env:FFMPEG -and (Test-Path $env:FFMPEG)) {
+if (-not $NoRecording -and $env:FFMPEG -and (Test-Path $env:FFMPEG)) {
     $ffmpegInfo = New-Object System.Diagnostics.ProcessStartInfo $env:FFMPEG
     # Info level for the input's start time (wall clock), which places the frames in time.
     $ffmpegInfo.Arguments = "-y -loglevel info -nostats -f gdigrab -framerate 60 -draw_mouse 0 -i desktop " +
@@ -148,7 +151,7 @@ if ($env:FFMPEG -and (Test-Path $env:FFMPEG)) {
 }
 
 $rec = $null
-if (-not $ffmpeg) {
+if (-not $ffmpeg -and -not $NoRecording) {
     $rec = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "`"$recorder`"", "`"$Out\frames`"", $start, 30 -PassThru -WindowStyle Hidden
 }
 Start-Sleep -Seconds 1
