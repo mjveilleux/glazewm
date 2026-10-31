@@ -185,7 +185,9 @@ fn update_window_effects(
     && old_window_effects.focused_window.border.enabled
   {
     if let Ok(window) = focused_container.as_window_container() {
-      _ = window.native().set_border_color(None);
+      state
+        .animation_manager
+        .set_border_color(&window, None, config);
     }
   }
 
@@ -198,7 +200,9 @@ fn update_window_effects(
       .filter(|window| window.id() != focused_container.id());
 
     for window in unfocused_windows {
-      _ = window.native().set_border_color(None);
+      state
+        .animation_manager
+        .set_border_color(&window, None, config);
     }
   }
 

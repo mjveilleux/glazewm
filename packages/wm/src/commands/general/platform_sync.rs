@@ -15,8 +15,8 @@ use wm_platform::{OpacityValue, Rect, WindowZOrder};
 
 use crate::{
   animation_manager::{
-    entrance_scale, AnimationPlan, AnimationTrigger, LiveRequest,
-    SlideRequest,
+    entrance_scale, AnimationManager, AnimationPlan, AnimationTrigger,
+    LiveRequest, SlideRequest,
   },
   models::{Container, WindowContainer},
   traits::{CommonGetters, PositionGetters, WindowGetters},
@@ -69,9 +69,12 @@ fn sync(state: &mut WmState, config: &UserConfig) -> anyhow::Result<()> {
     let prev_effects_window = state.prev_effects_window.clone();
 
     if let Ok(window) = focused_container.as_window_container() {
-      let is_animation_hidden =
-        state.animation_manager.is_hidden(&window.id());
-      apply_window_effects(&window, true, is_animation_hidden, config);
+      apply_window_effects(
+        &window,
+        true,
+        &mut state.animation_manager,
+        config,
+      );
       state.prev_effects_window = Some(window.clone());
     } else {
       state.prev_effects_window = None;
@@ -91,9 +94,12 @@ fn sync(state: &mut WmState, config: &UserConfig) -> anyhow::Result<()> {
       .filter(|window| window.id() != focused_container.id());
 
     for window in unfocused_windows {
-      let is_animation_hidden =
-        state.animation_manager.is_hidden(&window.id());
-      apply_window_effects(&window, false, is_animation_hidden, config);
+      apply_window_effects(
+        &window,
+        false,
+        &mut state.animation_manager,
+        config,
+      );
     }
   }
 
@@ -1072,12 +1078,15 @@ fn apply_window_effects(
   #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
   window: &WindowContainer,
   is_focused: bool,
-  // LINT: `is_animation_hidden` is only used on Windows.
+  // LINT: `animation_manager` is only used on Windows.
   #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-  is_animation_hidden: bool,
+  animation_manager: &mut AnimationManager,
   config: &UserConfig,
 ) {
   let window_effects = &config.value.window_effects;
+
+  #[cfg(target_os = "windows")]
+  let is_animation_hidden = animation_manager.is_hidden(&window.id());
 
   // An animation owns the opacity of windows it has hidden, and restores
   // it (transparency effect included) once it ends.
@@ -1107,7 +1116,7 @@ fn apply_window_effects(
     if window_effects.focused_window.border.enabled
       || window_effects.other_windows.border.enabled
     {
-      _ = window.native().set_border_color(None);
+      animation_manager.set_border_color(window, None, config);
     }
 
     if window_effects.focused_window.corner_style.enabled
@@ -1136,7 +1145,7 @@ fn apply_window_effects(
   if window_effects.focused_window.border.enabled
     || window_effects.other_windows.border.enabled
   {
-    apply_border_effect(window, effect_config);
+    apply_border_effect(window, effect_config, animation_manager, config);
   }
 
   #[cfg(target_os = "windows")]
@@ -1210,6 +1219,8 @@ mod tests {
 fn apply_border_effect(
   window: &WindowContainer,
   effect_config: &WindowEffectConfig,
+  animation_manager: &mut AnimationManager,
+  config: &UserConfig,
 ) {
   let border_color = if effect_config.border.enabled {
     Some(&effect_config.border.color)
@@ -1217,7 +1228,10 @@ fn apply_border_effect(
     None
   };
 
-  _ = window.native().set_border_color(border_color);
+  // A changing color is set every frame until it ends, the end included.
+  if animation_manager.set_border_color(window, border_color, config) {
+    return;
+  }
 
   let native = window.native().clone();
   let border_color = border_color.cloned();

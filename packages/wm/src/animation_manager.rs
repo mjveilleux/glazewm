@@ -435,6 +435,24 @@ impl CloseState {
   }
 }
 
+/// A focused window's border color changing, on Windows.
+#[cfg(target_os = "windows")]
+#[derive(Clone, Debug)]
+struct BorderTween {
+  window: NativeWindow,
+  from: wm_platform::Color,
+  to: wm_platform::Color,
+  clock: AnimationClock,
+}
+
+#[cfg(target_os = "windows")]
+impl BorderTween {
+  /// Returns the border's color at the current progress.
+  fn current(&self) -> wm_platform::Color {
+    self.from.interpolate(&self.to, self.clock.eased_progress())
+  }
+}
+
 /// A running close animation and the overlay that draws it.
 struct Closing {
   state: CloseState,
@@ -470,6 +488,14 @@ pub struct AnimationManager {
 
   /// Slides ready to start together (see `prepare_slides`).
   prepared: Vec<PreparedSlide>,
+
+  /// Border colors changing, keyed by window ID.
+  #[cfg(target_os = "windows")]
+  borders: HashMap<Uuid, BorderTween>,
+
+  /// The border color each window was last given, to change from.
+  #[cfg(target_os = "windows")]
+  border_colors: HashMap<Uuid, wm_platform::Color>,
 
   /// Close animations of windows already gone. Kept apart from the
   /// per-window maps: the window is unmanaged while its snapshot still
@@ -518,6 +544,10 @@ impl AnimationManager {
       tick_rx,
       windows: HashMap::new(),
       prepared: Vec::new(),
+      #[cfg(target_os = "windows")]
+      borders: HashMap::new(),
+      #[cfg(target_os = "windows")]
+      border_colors: HashMap::new(),
       closes: Vec::new(),
       context: None,
       #[cfg(not(target_os = "windows"))]
@@ -564,6 +594,8 @@ impl AnimationManager {
   }
 
   /// Whether an animation has set the window's real opacity to 0.
+  // LINT: Only window effects on Windows read it.
+  #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
   pub fn is_hidden(&self, window_id: &Uuid) -> bool {
     self.hidden.contains(window_id)
   }
@@ -735,6 +767,9 @@ impl AnimationManager {
   pub fn destroy_animation(&mut self, window: &WindowContainer) {
     self.cancel_animation(&window.id());
 
+    #[cfg(target_os = "windows")]
+    self.forget_border(&window.id());
+
     if self.hidden.remove(&window.id()) {
       #[cfg(target_os = "windows")]
       if let Err(err) = window
@@ -787,6 +822,9 @@ impl AnimationManager {
         }
       }
     }
+
+    #[cfg(target_os = "windows")]
+    self.tick_borders();
 
     #[cfg(not(target_os = "windows"))]
     if !self.slides.is_empty() {
@@ -1665,10 +1703,112 @@ impl AnimationManager {
 
   /// Whether no animation is running.
   fn is_idle(&self) -> bool {
+    #[cfg(target_os = "windows")]
+    if !self.borders.is_empty() {
+      return false;
+    }
+
     self.slides.is_empty()
       && self.fades.is_empty()
       && self.lives.is_empty()
       && self.closes.is_empty()
+  }
+
+  /// Sets a window's border color, changing to it along the `border`
+  /// animation's curve if one is configured and the window had another
+  /// color; `None` removes the border at once.
+  ///
+  /// Returns whether the color is animating: it's then set every frame
+  /// until it ends, so it's not to be set again meanwhile.
+  #[cfg(target_os = "windows")]
+  pub fn set_border_color(
+    &mut self,
+    window: &WindowContainer,
+    color: Option<&wm_platform::Color>,
+    config: &UserConfig,
+  ) -> bool {
+    let window_id = window.id();
+    let timing = config
+      .value
+      .animations
+      .resolved()
+      .border
+      .as_ref()
+      .filter(|_| wm_platform::system_animations_enabled());
+
+    // Changing from what's shown now, mid-change included.
+    let from = self
+      .borders
+      .get(&window_id)
+      .map(BorderTween::current)
+      .or_else(|| self.border_colors.get(&window_id).cloned());
+
+    let tween = match (timing, color, from) {
+      (Some(timing), Some(to), Some(from)) if from != *to => {
+        let frame_rate = window
+          .monitor()
+          .and_then(|monitor| monitor.native_properties().refresh_rate)
+          .unwrap_or(60);
+
+        Some(BorderTween {
+          window: window.native().clone(),
+          from,
+          to: to.clone(),
+          clock: AnimationClock::new(timing, frame_rate),
+        })
+      }
+      _ => None,
+    };
+
+    match color {
+      Some(color) => self.border_colors.insert(window_id, color.clone()),
+      None => self.border_colors.remove(&window_id),
+    };
+
+    let Some(tween) = tween else {
+      self.borders.remove(&window_id);
+      self.update_ticking();
+      let _ = window.native().set_border_color(color);
+      return false;
+    };
+
+    let _ = tween.window.set_border_color(Some(&tween.current()));
+    self.stats.animation_started(tween.clock.frame_rate);
+    self.borders.insert(window_id, tween);
+    self.update_ticking();
+
+    true
+  }
+
+  /// Forgets a window's border color and stops it changing, e.g. once
+  /// the window is no longer managed.
+  #[cfg(target_os = "windows")]
+  pub fn forget_border(&mut self, window_id: &Uuid) {
+    self.border_colors.remove(window_id);
+
+    if self.borders.remove(window_id).is_some() {
+      self.update_ticking();
+    }
+  }
+
+  /// Sets each changing border's color for this frame, and ends the
+  /// changes that are over at their final color.
+  #[cfg(target_os = "windows")]
+  fn tick_borders(&mut self) {
+    for tween in self.borders.values() {
+      if let Err(err) =
+        tween.window.set_border_color(Some(&tween.current()))
+      {
+        tracing::debug!("Failed to update border color: {err}");
+      }
+    }
+
+    let before = self.borders.len();
+    self.borders.retain(|_, tween| !tween.clock.is_complete());
+
+    if self.borders.len() != before {
+      self.update_ticking();
+    }
   }
 
   /// Starts or stops the ticks for animations that change every frame,
@@ -1681,7 +1821,11 @@ impl AnimationManager {
     }
 
     #[cfg(target_os = "windows")]
-    self.set_paced_ticks(!self.fades.is_empty() || !self.lives.is_empty());
+    self.set_paced_ticks(
+      !self.fades.is_empty()
+        || !self.lives.is_empty()
+        || !self.borders.is_empty(),
+    );
 
     #[cfg(not(target_os = "windows"))]
     self.update_tick_rate();
