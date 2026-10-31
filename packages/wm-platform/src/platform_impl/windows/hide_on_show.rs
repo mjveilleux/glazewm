@@ -2,8 +2,9 @@ use std::{
   collections::HashMap,
   sync::{
     atomic::{AtomicBool, Ordering},
-    LazyLock, Mutex,
+    LazyLock, Mutex, Once,
   },
+  time::{Duration, Instant},
 };
 
 use windows::{
@@ -13,12 +14,18 @@ use windows::{
     Graphics::Gdi::{
       RedrawWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE,
     },
-    UI::WindowsAndMessaging::{
-      EnumWindows, GetLayeredWindowAttributes, GetPropW,
-      GetWindowLongPtrW, IsWindowVisible, RemovePropW,
-      SetLayeredWindowAttributes, SetPropW, SetWindowLongPtrW,
-      GWL_EXSTYLE, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, WS_CAPTION,
-      WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    UI::{
+      Accessibility::{SetWinEventHook, HWINEVENTHOOK},
+      WindowsAndMessaging::{
+        DispatchMessageW, EnumWindows, GetLayeredWindowAttributes,
+        GetMessageW, GetPropW, GetWindowLongPtrW, IsWindowVisible,
+        RemovePropW, SetLayeredWindowAttributes, SetPropW,
+        SetWindowLongPtrW, TranslateMessage, EVENT_OBJECT_SHOW,
+        GWL_EXSTYLE, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG,
+        OBJID_WINDOW, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+        WS_CAPTION, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW,
+      },
     },
   },
 };
@@ -40,18 +47,138 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 static HIDDEN: LazyLock<Mutex<HashMap<isize, HiddenOnShow>>> =
   LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Windows whose latest show event has been handled, and when: the event
+/// reaches both the WM's own hook and the watcher thread's (see
+/// `watch_shows`), and only the first to get it may hide the window.
+/// Otherwise the second could hide a window again that the WM has already
+/// taken over and shown.
+static HANDLED: LazyLock<Mutex<HashMap<isize, Instant>>> =
+  LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Serializes `hide_if_app_window` between the two hooks.
+static HIDING: Mutex<()> = Mutex::new(());
+
+/// How long a show stays handled: longer than either hook takes to get
+/// the event.
+const HANDLED_FOR: Duration = Duration::from_secs(1);
+
 /// Implements [`crate::set_hide_windows_on_show`].
 pub(crate) fn set_enabled(enabled: bool) {
   ENABLED.store(enabled, Ordering::Relaxed);
+
+  if enabled {
+    watch_shows();
+  }
+}
+
+/// Starts, once, a thread whose only job is hiding new windows the moment
+/// they're shown.
+///
+/// The WM's own event hook runs on its busy main thread, which also
+/// captures and draws animations: there a new window could stay on screen
+/// for a few frames, where its app put it, before being hidden. This
+/// thread gets the show event as soon as it's sent.
+fn watch_shows() {
+  static STARTED: Once = Once::new();
+
+  STARTED.call_once(|| {
+    let spawned = std::thread::Builder::new()
+      .name("hide-on-show".to_string())
+      .spawn(|| {
+        // SAFETY: Hooks show events for this thread, with a callback that
+        // only looks at and hides windows; the hook lives as long as the
+        // thread, which pumps its messages below.
+        let hook = unsafe {
+          SetWinEventHook(
+            EVENT_OBJECT_SHOW,
+            EVENT_OBJECT_SHOW,
+            None,
+            Some(on_show),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+          )
+        };
+
+        if hook.is_invalid() {
+          tracing::warn!("Failed to watch for windows being shown.");
+          return;
+        }
+
+        // Out-of-context hooks are called from this thread's message
+        // loop.
+        let mut msg = MSG::default();
+
+        // SAFETY: `msg` is a valid, writable `MSG` for each call.
+        while unsafe { GetMessageW(&raw mut msg, None, 0, 0) }.as_bool() {
+          // SAFETY: `msg` was just filled in by `GetMessageW`.
+          unsafe {
+            let _ = TranslateMessage(&raw const msg);
+            DispatchMessageW(&raw const msg);
+          }
+        }
+      });
+
+    if let Err(err) = spawned {
+      tracing::warn!("Failed to start the hide-on-show thread: {err}");
+    }
+  });
+}
+
+/// Callback of the hook set by `watch_shows`.
+extern "system" fn on_show(
+  _hook: HWINEVENTHOOK,
+  _event_type: u32,
+  handle: HWND,
+  id_object: i32,
+  id_child: i32,
+  _event_thread: u32,
+  _event_time: u32,
+) {
+  if id_object == OBJID_WINDOW.0 && id_child == 0 && handle != HWND(0) {
+    hide_if_app_window(handle.0);
+  }
+}
+
+/// Marks the window's latest show as handled.
+///
+/// Returns `false` if it already was, by the other hook.
+fn claim_show(handle: isize) -> bool {
+  let Ok(mut handled) = HANDLED.lock() else {
+    return false;
+  };
+
+  let now = Instant::now();
+  handled.retain(|_, at| now.duration_since(*at) < HANDLED_FOR);
+
+  if handled.contains_key(&handle) {
+    return false;
+  }
+
+  handled.insert(handle, now);
+  true
 }
 
 /// Hides a window that has just been shown, if it looks like one the WM
 /// will manage.
 ///
-/// Called from the window event hook, before the event reaches the WM, so
-/// the window is hidden before it has been on screen for long.
+/// Called from the hide-on-show thread (see `watch_shows`) and from the
+/// WM's window event hook, before the event reaches the WM, so the window
+/// is hidden before it has been on screen for long. Whichever gets the
+/// show first handles it.
 pub(crate) fn hide_if_app_window(handle: isize) {
   if !ENABLED.load(Ordering::Relaxed) {
+    return;
+  }
+
+  // Held throughout, so a hook that finds the show claimed by the other
+  // returns (and lets the event reach the WM) only once the window is
+  // hidden and recorded: the WM then always finds it to take over.
+  let Ok(_hiding) = HIDING.lock() else {
+    return;
+  };
+
+  if !claim_show(handle) {
     return;
   }
 
