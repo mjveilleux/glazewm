@@ -31,6 +31,7 @@ use crate::{
 #[cfg(target_os = "windows")]
 pub fn hides_new_windows(config: &UserConfig) -> bool {
   config.value.general.hide_method == wm_common::HideMethod::Cloak
+    && wm_platform::system_animations_enabled()
     && config.value.animations.open_effect().is_some_and(|open| {
       matches!(open.style, AnimationEffect::Fade | AnimationEffect::Popin)
     })
@@ -610,7 +611,9 @@ impl AnimationManager {
     //  - The window is hidden in the corner, but not animating. Safeguards
     //    against race condition where window finished an animation, but
     //    hasn't been moved to the real window position yet.
-    if window.native_properties().is_minimized
+    //  - The system's own animations are turned off (accessibility).
+    if !wm_platform::system_animations_enabled()
+      || window.native_properties().is_minimized
       || (window.native_properties().is_maximized
         && cfg!(target_os = "macos"))
       || (!self.is_animating(&window.id())
@@ -781,7 +784,12 @@ impl AnimationManager {
     frame_rate: u32,
     dispatcher: &Dispatcher,
   ) {
-    let Some(effect) = config.value.animations.close_effect() else {
+    let Some(effect) = config
+      .value
+      .animations
+      .close_effect()
+      .filter(|_| wm_platform::system_animations_enabled())
+    else {
       return;
     };
 

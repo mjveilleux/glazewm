@@ -1,6 +1,10 @@
 use windows::Win32::{
-  Foundation::HWND,
+  Foundation::{BOOL, HWND},
   Graphics::Dwm::{DwmGetCompositionTimingInfo, DWM_TIMING_INFO},
+  UI::WindowsAndMessaging::{
+    SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+  },
 };
 
 use crate::CompositorFrameCounts;
@@ -27,4 +31,29 @@ pub(crate) fn compositor_frame_counts() -> Option<CompositorFrameCounts> {
       None
     }
   }
+}
+
+/// Implements [`crate::system_animations_enabled`].
+///
+/// Animations are allowed if the setting can't be read.
+pub(crate) fn system_animations_enabled() -> bool {
+  let mut enabled = BOOL(1);
+
+  // SAFETY: `SPI_GETCLIENTAREAANIMATION` writes one `BOOL` to the given
+  // pointer, which points at `enabled`.
+  let result = unsafe {
+    SystemParametersInfoW(
+      SPI_GETCLIENTAREAANIMATION,
+      0,
+      Some((&raw mut enabled).cast()),
+      SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+    )
+  };
+
+  if let Err(err) = result {
+    tracing::debug!("Failed to read the animation effects setting: {err}");
+    return true;
+  }
+
+  enabled.as_bool()
 }

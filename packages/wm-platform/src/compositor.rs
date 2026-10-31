@@ -25,3 +25,16 @@ pub struct CompositorFrameCounts {
 pub fn compositor_frame_counts() -> Option<CompositorFrameCounts> {
   platform_impl::compositor_frame_counts()
 }
+
+/// Whether the system lets apps animate, i.e. the user hasn't turned
+/// animations off for accessibility.
+///
+/// # Platform-specific
+///
+/// - **Windows**: The "Animation effects" setting (Settings >
+///   Accessibility > Visual effects), `SPI_GETCLIENTAREAANIMATION`.
+/// - **macOS**: Always `true`.
+#[must_use]
+pub fn system_animations_enabled() -> bool {
+  platform_impl::system_animations_enabled()
+}
