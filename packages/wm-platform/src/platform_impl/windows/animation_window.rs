@@ -231,6 +231,9 @@ pub(crate) struct AnimationWindow {
   clip: ThreadBound<IDCompositionRectangleClip>,
   /// Scales the fill to the window's current size.
   fill_scale: ThreadBound<IDCompositionScaleTransform>,
+  /// Scales the whole capture about its center (1.0 unless set by
+  /// [`AnimationWindow::update_scaled`]).
+  root_scale: ThreadBound<IDCompositionScaleTransform>,
   /// Frame of the `AnimationWindow`.
   outer_rect: Rect,
   dispatcher: Dispatcher,
@@ -356,6 +359,7 @@ impl AnimationWindow {
 
         let clip = unsafe { dcomp_device.CreateRectangleClip()? };
         let fill_scale = unsafe { dcomp_device.CreateScaleTransform()? };
+        let root_scale = unsafe { dcomp_device.CreateScaleTransform()? };
 
         unsafe {
           // Nearest neighbor, so the scaled fill keeps hard edges instead
@@ -370,6 +374,11 @@ impl AnimationWindow {
           clip.SetLeft2(0.0)?;
           clip.SetTop2(0.0)?;
           root_visual.SetClip(&clip)?;
+
+          // Its own size until a close animation shrinks it.
+          root_scale.SetScaleX2(1.0)?;
+          root_scale.SetScaleY2(1.0)?;
+          root_visual.SetTransform(&root_scale)?;
 
           let fill_visual: IDCompositionVisual = fill_visual.cast()?;
           root_visual.AddVisual(
@@ -386,6 +395,7 @@ impl AnimationWindow {
           ThreadBound::new(root_visual, dispatcher.clone());
         let clip = ThreadBound::new(clip, dispatcher.clone());
         let fill_scale = ThreadBound::new(fill_scale, dispatcher.clone());
+        let root_scale = ThreadBound::new(root_scale, dispatcher.clone());
         let dcomp_target =
           ThreadBound::new(dcomp_target, dispatcher.clone());
 
@@ -410,6 +420,7 @@ impl AnimationWindow {
           root_visual,
           clip,
           fill_scale,
+          root_scale,
           outer_rect: outer_rect.clone(),
           dispatcher: dispatcher.clone(),
         })
@@ -450,6 +461,38 @@ impl AnimationWindow {
         &self.outer_rect,
         opacity,
       )
+    })?
+  }
+
+  /// Implements [`AnimationWindow::update_scaled`].
+  #[allow(clippy::cast_precision_loss)]
+  pub(crate) fn update_scaled(
+    &self,
+    inner_rect: &Rect,
+    opacity: Option<&OpacityValue>,
+    scale: f32,
+  ) -> crate::Result<()> {
+    self.dispatcher.dispatch_sync(|| {
+      Self::update_visual(
+        self.root_visual.get_ref()?,
+        self.clip.get_ref()?,
+        self.fill_scale.get_ref()?,
+        inner_rect,
+        &self.outer_rect,
+        opacity,
+      )?;
+
+      // About the center of the clipped capture, in the root visual's own
+      // coordinates (its offset is applied after the transform).
+      let root_scale = self.root_scale.get_ref()?;
+      unsafe {
+        root_scale.SetCenterX2(inner_rect.width() as f32 / 2.0)?;
+        root_scale.SetCenterY2(inner_rect.height() as f32 / 2.0)?;
+        root_scale.SetScaleX2(scale)?;
+        root_scale.SetScaleY2(scale)?;
+      }
+
+      Ok(())
     })?
   }
 

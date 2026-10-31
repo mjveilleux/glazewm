@@ -42,6 +42,10 @@ pub fn hides_new_windows(config: &UserConfig) -> bool {
 /// `popin 87%`).
 pub const POPIN_START_SCALE: f32 = 0.87;
 
+/// Size a closing window's pop-out ends at, relative to the window's
+/// (Omarchy's `windowsOut`, `popin 95%`).
+pub const CLOSE_END_SCALE: f32 = 0.95;
+
 pub enum AnimationTrigger {
   WindowOpened,
   WindowMoved,
@@ -202,6 +206,41 @@ impl LiveState {
   }
 }
 
+/// State of a close animation: a snapshot of a closed window fading out
+/// (and, for `popin`, shrinking) where the window was.
+// LINT: Close animations are only started on Windows.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[derive(Clone, Debug)]
+struct CloseState {
+  clock: AnimationClock,
+
+  /// Where the window was when it was closed.
+  rect: Rect,
+
+  /// Scale the snapshot ends at (1.0: fade only).
+  end_scale: f32,
+}
+
+// LINT: Close animations are only started on Windows.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+impl CloseState {
+  /// Returns the snapshot's opacity and scale at the current progress.
+  fn current(&self) -> (OpacityValue, f32) {
+    let progress = self.clock.eased_progress();
+
+    (
+      OpacityValue(1.0 - progress),
+      1.0 + (self.end_scale - 1.0) * progress,
+    )
+  }
+}
+
+/// A running close animation and the overlay that draws it.
+struct Closing {
+  state: CloseState,
+  overlay: AnimationWindow,
+}
+
 /// Manages animations for all windows.
 ///
 /// A window has at most one animation at a time: a slide, a fade or a
@@ -228,6 +267,11 @@ pub struct AnimationManager {
 
   /// Per-window overlay windows for slides, keyed by window ID.
   windows: HashMap<Uuid, AnimationWindow>,
+
+  /// Close animations of windows already gone. Kept apart from the
+  /// per-window maps: the window is unmanaged while its snapshot still
+  /// fades, so nothing done to a window ID touches them.
+  closes: Vec<Closing>,
 
   /// Shared GPU context for animation overlay windows. Lazily
   /// initialized on the first slide.
@@ -260,6 +304,7 @@ impl AnimationManager {
       tick_tx,
       tick_rx,
       windows: HashMap::new(),
+      closes: Vec::new(),
       context: None,
       tick_task: None,
       tick_frame_rate: None,
@@ -421,11 +466,11 @@ impl AnimationManager {
       }
     }
 
-    if self.slides.is_empty() {
+    if self.slides.is_empty() && self.closes.is_empty() {
       return Ok(());
     }
 
-    self
+    let result = self
       .context
       .as_ref()
       .context("Animation context not initialized.")?
@@ -438,10 +483,57 @@ impl AnimationManager {
               }
             }
           }
+
+          #[cfg(target_os = "windows")]
+          for closing in &self.closes {
+            let (opacity, scale) = closing.state.current();
+            closing.overlay.update_scaled(
+              &closing.state.rect,
+              Some(&opacity),
+              scale,
+            )?;
+          }
+
           anyhow::Ok(())
         },
         dispatcher,
-      )?
+      )?;
+
+    self.end_completed_closes();
+
+    result
+  }
+
+  /// Removes close animations that have completed and destroys their
+  /// overlays.
+  fn end_completed_closes(&mut self) {
+    if !self
+      .closes
+      .iter()
+      .any(|closing| closing.state.clock.is_complete())
+    {
+      return;
+    }
+
+    let (done, running) = std::mem::take(&mut self.closes)
+      .into_iter()
+      .partition::<Vec<_>, _>(|closing| closing.state.clock.is_complete());
+
+    self.closes = running;
+
+    for closing in done {
+      // On a thread of its own, as in `cancel_animation`, so the tick
+      // never waits on the teardown.
+      std::thread::spawn(move || {
+        if let Err(err) = closing.overlay.destroy() {
+          tracing::warn!(
+            "Failed to destroy close animation window: {err}"
+          );
+        }
+      });
+    }
+
+    self.update_tick_rate();
   }
 
   /// Returns how the window should animate to `target_rect`, or `None` if
@@ -591,6 +683,113 @@ impl AnimationManager {
     self.update_tick_rate();
   }
 
+  /// Creates the shared GPU context on first use.
+  ///
+  /// Returns `false` when it couldn't be made; the animation is then
+  /// skipped, and the next one tries again.
+  fn ensure_context(&mut self, dispatcher: &Dispatcher) -> bool {
+    if self.context.is_none() {
+      match AnimationContext::new(dispatcher) {
+        Ok(context) => self.context = Some(context),
+        Err(err) => {
+          tracing::warn!("Failed to create animation context: {err}");
+          return false;
+        }
+      }
+    }
+
+    true
+  }
+
+  /// Starts a close animation for a window the WM is about to close.
+  ///
+  /// Takes a snapshot of the window as it is now, under the window: once
+  /// it closes, the snapshot fades out (and for `popin`, shrinks) where
+  /// it was. If the app keeps the window open (e.g. it asks to save), the
+  /// snapshot fades unseen beneath it.
+  ///
+  /// Skipped when no close animation is configured, and for windows that
+  /// can't be seen or shouldn't move (minimized, maximized, fullscreen,
+  /// still transparent from an animation).
+  #[cfg(target_os = "windows")]
+  pub fn start_close(
+    &mut self,
+    window: &WindowContainer,
+    config: &UserConfig,
+    frame_rate: u32,
+    dispatcher: &Dispatcher,
+  ) {
+    let Some(effect) = config.value.animations.close_effect() else {
+      return;
+    };
+
+    let properties = window.native_properties();
+
+    if properties.is_minimized
+      || properties.is_maximized
+      || matches!(window.state(), wm_common::WindowState::Fullscreen(_))
+      || self.hidden.contains(&window.id())
+    {
+      return;
+    }
+
+    if !self.ensure_context(dispatcher) {
+      return;
+    }
+
+    // A running animation ends here, so the snapshot is of the window
+    // itself rather than mid-move.
+    self.cancel_animation(&window.id());
+
+    let rect = properties.frame.clone();
+    let native = window.native().clone();
+    let request = AnimationWindowRequest {
+      window: &native,
+      inner_rect: rect.clone(),
+      outer_rect: rect.clone(),
+      opacity: None,
+    };
+
+    let overlay = match &self.context {
+      Some(context) => {
+        AnimationWindow::new_many(context, &[request], dispatcher).pop()
+      }
+      None => None,
+    };
+
+    match overlay {
+      Some(Ok(overlay)) => {
+        // The snapshot is the window's exit; the system's own close
+        // transition would play over it. If the app keeps the window
+        // open, it only loses the system's minimize animation.
+        if let Err(err) = native.set_transitions_disabled(true) {
+          tracing::debug!("Failed to disable system transitions: {err}");
+        }
+
+        self.closes.push(Closing {
+          state: CloseState {
+            // Started once the snapshot is up, so its capture doesn't eat
+            // into the animation.
+            clock: AnimationClock::new(effect, frame_rate),
+            rect,
+            end_scale: if effect.effect_type == AnimationEffect::Popin {
+              CLOSE_END_SCALE
+            } else {
+              1.0
+            },
+          },
+          overlay,
+        });
+
+        self.update_tick_rate();
+      }
+      Some(Err(err)) => {
+        tracing::warn!("Failed to create close animation window: {err}");
+      }
+      None => {}
+    }
+  }
+
   /// Starts or extends slide animations for several windows at once.
   ///
   /// Overlays for windows that weren't already sliding are created
@@ -609,14 +808,8 @@ impl AnimationManager {
       return started;
     }
 
-    if self.context.is_none() {
-      match AnimationContext::new(dispatcher) {
-        Ok(context) => self.context = Some(context),
-        Err(err) => {
-          tracing::warn!("Failed to create animation context: {err}");
-          return started;
-        }
-      }
+    if !self.ensure_context(dispatcher) {
+      return started;
     }
 
     let mut new_slides = Vec::new();
@@ -814,6 +1007,12 @@ impl AnimationManager {
       .map(|slide| slide.clock.frame_rate)
       .chain(self.fades.values().map(|fade| fade.clock.frame_rate))
       .chain(self.lives.values().map(|live| live.clock.frame_rate))
+      .chain(
+        self
+          .closes
+          .iter()
+          .map(|closing| closing.state.clock.frame_rate),
+      )
       .max();
 
     // Keep the running task when the rate is unchanged, so ticks stay
@@ -857,7 +1056,7 @@ mod tests {
   use wm_common::AnimationEffectConfig;
   use wm_platform::{EasingFunction, Rect};
 
-  use super::{AnimationClock, SlideState};
+  use super::{AnimationClock, CloseState, SlideState, CLOSE_END_SCALE};
 
   fn clock(elapsed_ms: u64, duration_ms: u32) -> AnimationClock {
     let config = AnimationEffectConfig {
@@ -889,5 +1088,37 @@ mod tests {
     };
 
     assert_eq!(slide.current_rect(), slide.target_rect);
+  }
+
+  /// A close animation `elapsed_ms` into 160 ms, ending at `end_scale`.
+  fn close(elapsed_ms: u64, end_scale: f32) -> CloseState {
+    CloseState {
+      clock: clock(elapsed_ms, 160),
+      rect: Rect::from_xy(0, 0, 1000, 800),
+      end_scale,
+    }
+  }
+
+  #[test]
+  fn close_starts_as_the_window() {
+    let (opacity, scale) = close(0, CLOSE_END_SCALE).current();
+
+    assert!((opacity.0 - 1.0).abs() < 0.05);
+    assert!((scale - 1.0).abs() < 0.01);
+  }
+
+  #[test]
+  fn close_ends_invisible_and_small() {
+    let (opacity, scale) = close(500, CLOSE_END_SCALE).current();
+
+    assert!(opacity.0.abs() < f32::EPSILON);
+    assert!((scale - CLOSE_END_SCALE).abs() < f32::EPSILON);
+  }
+
+  #[test]
+  fn fade_close_keeps_its_size() {
+    let (_, scale) = close(80, 1.0).current();
+
+    assert!((scale - 1.0).abs() < f32::EPSILON);
   }
 }

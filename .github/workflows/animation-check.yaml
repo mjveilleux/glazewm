@@ -44,7 +44,14 @@ jobs:
       - name: Record animations (real speed)
         if: always()
         shell: pwsh
-        run: ./scripts/animation-check.ps1 -Out out-real -DurationMs 200 -OpenMs 150
+        run: ./scripts/animation-check.ps1 -Out out-real -DurationMs 200 -OpenMs 150 -CloseMs 160
+
+      # Animations off (animations.enabled: false, settings kept): nothing may animate, and no
+      # overlay may appear.
+      - name: Record with animations off
+        if: always()
+        shell: pwsh
+        run: ./scripts/animation-check.ps1 -Out out-off -DurationMs 200 -Disabled
 
       - name: Contact sheets and videos
         if: always()
@@ -81,4 +88,5 @@ jobs:
           path: |
             out/
             out-real/
+            out-off/
           retention-days: 7

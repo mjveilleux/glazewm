@@ -9,8 +9,8 @@ use windows::{
     Graphics::Dwm::{
       DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_BORDER_COLOR,
       DWMWA_CLOAKED, DWMWA_COLOR_NONE, DWMWA_EXTENDED_FRAME_BOUNDS,
-      DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_DONOTROUND,
-      DWMWCP_ROUND, DWMWCP_ROUNDSMALL,
+      DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_WINDOW_CORNER_PREFERENCE,
+      DWMWCP_DEFAULT, DWMWCP_DONOTROUND, DWMWCP_ROUND, DWMWCP_ROUNDSMALL,
     },
     System::Threading::{
       OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
@@ -631,6 +631,27 @@ impl NativeWindow {
         DWMWA_BORDER_COLOR,
         std::ptr::from_ref(&bgr).cast(),
         std::mem::size_of::<u32>() as u32,
+      )?;
+    }
+
+    Ok(())
+  }
+
+  /// Implements [`NativeWindowWindowsExt::set_transitions_disabled`].
+  pub(crate) fn set_transitions_disabled(
+    &self,
+    disabled: bool,
+  ) -> crate::Result<()> {
+    let value = BOOL::from(disabled);
+
+    // SAFETY: `value` outlives the call, and the size passed is its own.
+    unsafe {
+      #[allow(clippy::cast_possible_truncation)]
+      DwmSetWindowAttribute(
+        self.hwnd(),
+        DWMWA_TRANSITIONS_FORCEDISABLED,
+        std::ptr::from_ref(&value).cast(),
+        std::mem::size_of::<BOOL>() as u32,
       )?;
     }
 

@@ -147,6 +147,28 @@ impl AnimationWindow {
     self.inner.update(inner_rect, opacity)
   }
 
+  /// Like [`AnimationWindow::update`], and also scales the capture about
+  /// its center (`1.0` is its own size).
+  ///
+  /// For a window leaving: unlike a slide's resize, which cuts the
+  /// capture, this shrinks the whole picture.
+  ///
+  /// Does not commit; should be called within
+  /// `AnimationContext::transaction` for the change to take effect.
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  #[cfg(target_os = "windows")]
+  pub fn update_scaled(
+    &self,
+    inner_rect: &Rect,
+    opacity: Option<&OpacityValue>,
+    scale: f32,
+  ) -> crate::Result<()> {
+    self.inner.update_scaled(inner_rect, opacity, scale)
+  }
+
   /// Destroys the window and releases GPU resources.
   pub fn destroy(self) -> crate::Result<()> {
     self.inner.destroy()

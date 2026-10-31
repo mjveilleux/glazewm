@@ -10,16 +10,25 @@
     out\events.txt says when each step happened, out\state-*.json is GlazeWM's window list after
     it, and out\checks.txt is what's on screen once everything settles: each Notepad's frame and
     opacity, and any animation overlay left behind. The script exits 1 if a check fails.
+
+    One Notepad is closed with GlazeWM's close command, the close animation's only trigger: its
+    snapshot must be up right after the command and gone once the animation has had its time.
+    With -Disabled the config says animations.enabled: false, and no overlay may appear at all.
 #>
 param(
     [string]$Bin = 'target\release',
     [string]$Out = 'out',
     [int]$DurationMs = 600,
     # The fade-in of new windows; the same as the slides when left out.
-    [int]$OpenMs = 0
+    [int]$OpenMs = 0,
+    # The fade-out of closed windows; 80% of the slides when left out (exits are quicker).
+    [int]$CloseMs = 0,
+    # animations.enabled: false, with every other setting kept.
+    [switch]$Disabled
 )
 $ErrorActionPreference = 'Stop'
 if ($OpenMs -le 0) { $OpenMs = $DurationMs }
+if ($CloseMs -le 0) { $CloseMs = [Math]::Max(1, [int]($DurationMs * 0.8)) }
 
 New-Item -ItemType Directory -Force "$Out\frames" | Out-Null
 $Out = (Resolve-Path $Out).Path
@@ -38,6 +47,11 @@ workspaces:
   - name: '1'
   - name: '2'
 animations:
+  enabled: $(if ($Disabled) { 'false' } else { 'true' })
+  window_close:
+    effect_type: 'popin'
+    duration_ms: $CloseMs
+    easing: 'ease_out_quint'
   window_move:
     effect_type: 'slide'
     duration_ms: $DurationMs
@@ -113,36 +127,6 @@ Write-Event 'glazewm ready'
 $rec = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "`"$recorder`"", "`"$Out\frames`"", $start, 30 -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 1
 
-function Save-State($name) {
-    & $cli query windows | Set-Content "$Out\state-$name.json"
-}
-
-$pause = [Math]::Max(2, [Math]::Ceiling(($DurationMs + 1200) / 1000))
-$notepads = @()
-foreach ($i in 1..3) {
-    Write-Event "open notepad $i"
-    $notepads += Start-Process notepad -PassThru
-    Start-Sleep -Seconds $pause
-    Save-State "open-$i"
-}
-
-Write-Event 'close notepad 2'
-Stop-Process -Id $notepads[1].Id
-Start-Sleep -Seconds $pause
-Save-State 'close-2'
-
-# The focused Notepad swaps places with its neighbor: two windows slide.
-Write-Event 'move window left'
-& $cli command focus --container-id ((& $cli query windows | ConvertFrom-Json).data.windows |
-        Where-Object processName -eq 'notepad' | Select-Object -Last 1).id | Out-Null
-& $cli command move --direction left | Out-Null
-Start-Sleep -Seconds $pause
-Save-State 'move'
-
-Write-Event 'done'
-$rec | Wait-Process -Timeout 40 -ErrorAction SilentlyContinue
-
-# What's on screen once everything has settled.
 Add-Type @'
 using System;
 using System.Collections.Generic;
@@ -166,9 +150,63 @@ public static class Win {
   public static string Class(IntPtr hwnd) { var sb = new StringBuilder(256); GetClassName(hwnd, sb, 256); return sb.ToString(); }
 }
 '@
+
+# GlazeWM's animation overlays (their window class, platform_impl/windows/animation_window.rs).
+function Get-Overlays { @([Win]::All() | Where-Object { [Win]::Class($_) -eq 'AnimationWindow' }) }
+# Any overlay seen after a step, for -Disabled.
+$overlaysSeen = 0
+
+function Save-State($name) {
+    & $cli query windows | Set-Content "$Out\state-$name.json"
+    $script:overlaysSeen += (Get-Overlays).Count
+}
+
+$pause = [Math]::Max(2, [Math]::Ceiling(($DurationMs + 1200) / 1000))
+$notepads = @()
+foreach ($i in 1..3) {
+    Write-Event "open notepad $i"
+    $notepads += Start-Process notepad -PassThru
+    Start-Sleep -Seconds $pause
+    Save-State "open-$i"
+}
+
+# Closed through GlazeWM, the close animation's trigger: the command returns once the snapshot
+# is up, so it must be there now (and, with animations off, must not).
+Write-Event 'close notepad 2'
+$notepads[1].Refresh()
+$closing = (& $cli query windows | ConvertFrom-Json).data.windows |
+    Where-Object { $_.handle -eq [long]$notepads[1].MainWindowHandle } | Select-Object -First 1
+if (-not $closing) { throw "GlazeWM doesn't manage notepad 2 (handle $($notepads[1].MainWindowHandle))." }
+& $cli command --id $closing.id close | Out-Null
+$upNow = (Get-Overlays).Count
+$closeOverlayUp = $upNow -gt 0
+$overlaysSeen += $upNow
+Write-Event "close overlays up: $upNow"
+Start-Sleep -Seconds $pause
+Save-State 'close-2'
+
+# The focused Notepad swaps places with its neighbor: two windows slide.
+Write-Event 'move window left'
+& $cli command focus --container-id ((& $cli query windows | ConvertFrom-Json).data.windows |
+        Where-Object processName -eq 'notepad' | Select-Object -Last 1).id | Out-Null
+& $cli command move --direction left | Out-Null
+Start-Sleep -Seconds $pause
+Save-State 'move'
+
+Write-Event 'done'
+$rec | Wait-Process -Timeout 40 -ErrorAction SilentlyContinue
+
+# What's on screen once everything has settled.
 $failed = $false
 $lines = @()
-$overlays = [Win]::All() | Where-Object { [Win]::Class($_) -eq 'AnimationWindow' }
+if ($Disabled) {
+    $lines += "animations disabled; overlays seen during the steps: $overlaysSeen"
+    if ($overlaysSeen) { $failed = $true }
+} else {
+    $lines += "close overlay up right after the close command: $closeOverlayUp"
+    if (-not $closeOverlayUp) { $failed = $true }
+}
+$overlays = Get-Overlays
 $lines += "animation overlays left: $(@($overlays).Count)"
 if (@($overlays).Count) { $failed = $true }
 $alive = $notepads | Where-Object { -not $_.HasExited } | ForEach-Object { $_.Id }

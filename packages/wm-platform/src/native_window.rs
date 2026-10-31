@@ -294,6 +294,17 @@ pub trait NativeWindowWindowsExt {
   /// This method is only available on Windows.
   fn set_border_color(&self, color: Option<&Color>) -> crate::Result<()>;
 
+  /// Turns the window's own system transitions (DWM's open, close,
+  /// minimize and restore animations) off or back on.
+  ///
+  /// For when the WM draws a transition of its own, e.g. a close
+  /// animation that would otherwise play together with the system's.
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  fn set_transitions_disabled(&self, disabled: bool) -> crate::Result<()>;
+
   /// Sets the corner style of the window.
   ///
   /// # Platform-specific
@@ -417,6 +428,10 @@ impl NativeWindowWindowsExt for NativeWindow {
 
   fn set_border_color(&self, color: Option<&Color>) -> crate::Result<()> {
     self.inner.set_border_color(color)
+  }
+
+  fn set_transitions_disabled(&self, disabled: bool) -> crate::Result<()> {
+    self.inner.set_transitions_disabled(disabled)
   }
 
   fn set_corner_style(

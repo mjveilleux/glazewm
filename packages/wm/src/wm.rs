@@ -372,6 +372,25 @@ impl WindowManager {
       InvokeCommand::Close => {
         match subject_container.as_window_container() {
           Ok(window) => {
+            // Snapshot first: once closed, there's nothing to capture.
+            // Windows that close themselves just vanish.
+            #[cfg(target_os = "windows")]
+            {
+              let frame_rate = window
+                .monitor()
+                .and_then(|monitor| {
+                  monitor.native_properties().refresh_rate
+                })
+                .unwrap_or(60);
+
+              state.animation_manager.start_close(
+                &window,
+                config,
+                frame_rate,
+                &state.dispatcher,
+              );
+            }
+
             // Window handle might no longer be valid here.
             if let Err(err) = window.native().close() {
               warn!("Failed to close window: {:?}", err);
