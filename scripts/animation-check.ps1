@@ -316,6 +316,19 @@ foreach ($workspace in '2', '1', '3', '1') {
 Start-Sleep -Seconds $pause
 Save-State 'switches'
 
+# Timing runs only: windows sliding back and forth for about six seconds without a break, each
+# move starting before the last is over, so the compositor's pace is measured over hundreds of
+# frames rather than a dozen (where one dropped frame is the whole p95).
+if ($NoRecording) {
+    Write-Event 'sustained slides'
+    $gap = [Math]::Max(50, [int]($DurationMs * 0.75))
+    foreach ($i in 1..40) {
+        & $cli command move --direction $(if ($i % 2) { 'left' } else { 'right' }) | Out-Null
+        Start-Sleep -Milliseconds $gap
+    }
+    Start-Sleep -Seconds $pause
+}
+
 Write-Event 'done'
 if ($rec) { $rec | Wait-Process -Timeout 40 -ErrorAction SilentlyContinue }
 if ($ffmpeg) {
@@ -408,6 +421,12 @@ $lines += '  compositor frames during each run (what is seen): frames | interval
 foreach ($run in $anim | Where-Object { $_ -match 'Compositor frames' }) {
     $f = { param($n) Get-Field $run $n }
     $lines += "    $(& $f frames) | $(& $f mean_ms) / $(& $f p95_ms) / $(& $f max_ms) | $(& $f late) | $(& $f period_ms)"
+}
+# The longest run: the sustained slides, in timing runs.
+$longest = $anim | Where-Object { $_ -match 'Compositor frames' } |
+    Sort-Object { [int](Get-Field $_ 'frames') } -Descending | Select-Object -First 1
+if ($longest) {
+    $lines += "  longest run: $(Get-Field $longest 'frames') frames, interval mean $(Get-Field $longest 'mean_ms') / p95 $(Get-Field $longest 'p95_ms') / max $(Get-Field $longest 'max_ms') ms, $(Get-Field $longest 'late') late, period $(Get-Field $longest 'period_ms') ms"
 }
 $lines += '  WM ticks during each run (0 frames: the compositor played it alone): frames | interval mean / p95 / max | late | period | duration | dwm composed / expected, dropped'
 foreach ($run in $anim | Where-Object { $_ -match 'Animation frames' }) {
