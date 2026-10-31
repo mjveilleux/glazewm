@@ -36,10 +36,11 @@ use windows::{
         SHELLEXECUTEINFOW,
       },
       WindowsAndMessaging::{
-        FindWindowExW, FindWindowW, GetCursorPos, MessageBoxW,
-        SetCursorPos, SystemParametersInfoW, ANIMATIONINFO, MB_ICONERROR,
-        MB_OK, MB_SYSTEMMODAL, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE,
-        SPI_GETANIMATION, SPI_SETANIMATION, SW_HIDE, SW_NORMAL,
+        AllowSetForegroundWindow, FindWindowExW, FindWindowW,
+        GetCursorPos, MessageBoxW, SetCursorPos, SystemParametersInfoW,
+        ANIMATIONINFO, ASFW_ANY, MB_ICONERROR, MB_OK, MB_SYSTEMMODAL,
+        SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SPI_GETANIMATION,
+        SPI_SETANIMATION, SW_HIDE, SW_NORMAL,
         SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
       },
     },
@@ -162,6 +163,18 @@ pub trait DispatcherExtWindows {
   /// This method is only available on Windows.
   fn is_taskbar_ready(&self) -> bool;
 
+  /// Lets any process bring a window to the foreground once, as this
+  /// process could.
+  ///
+  /// For handing focus on to another process that acts on a key the WM
+  /// received (e.g. an IPC subscriber opening a menu). Only works while
+  /// this process may set the foreground window itself.
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  fn allow_any_foreground(&self) -> crate::Result<()>;
+
   /// Gets whether system-wide window transition animations are enabled.
   ///
   /// # Platform-specific
@@ -249,6 +262,13 @@ impl DispatcherExtWindows for Dispatcher {
         )
         .0 != 0
     }
+  }
+
+  fn allow_any_foreground(&self) -> crate::Result<()> {
+    // SAFETY: Takes no pointers; fails harmlessly when this process may
+    // not set the foreground window itself.
+    unsafe { AllowSetForegroundWindow(ASFW_ANY) }?;
+    Ok(())
   }
 
   fn window_animations_enabled(&self) -> crate::Result<bool> {

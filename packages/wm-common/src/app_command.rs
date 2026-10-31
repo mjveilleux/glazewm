@@ -151,12 +151,26 @@ pub enum SubscribableEvent {
   WorkspaceDeactivated,
   WorkspaceUpdated,
   PauseChanged,
+  /// Custom events from the `emit` command.
+  Custom,
 }
 
 #[derive(Clone, Debug, Parser, PartialEq, Serialize)]
 pub enum InvokeCommand {
   AdjustBorders(InvokeAdjustBordersCommand),
   Close,
+  /// Broadcasts a custom event to IPC subscribers, without running
+  /// anything (e.g. `emit omawin launcher` asks omawin's shell to open
+  /// its launcher).
+  Emit {
+    /// Name of the event; subscribers filter on it.
+    #[clap(required = true)]
+    name: String,
+
+    /// Words passed along with the event, flags included.
+    #[clap(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+  },
   Focus(InvokeFocusCommand),
   Ignore,
   Move(InvokeMoveCommand),
@@ -260,6 +274,20 @@ pub enum InvokeCommand {
   WmRedraw,
   WmReloadConfig,
   WmTogglePause,
+}
+
+impl InvokeCommand {
+  /// Whether the command runs while the WM is paused.
+  ///
+  /// Unpausing must stay possible, and `emit` only notifies IPC
+  /// subscribers (it moves no window), so both pass.
+  #[must_use]
+  pub fn runs_while_paused(&self) -> bool {
+    matches!(
+      self,
+      InvokeCommand::WmTogglePause | InvokeCommand::Emit { .. }
+    )
+  }
 }
 
 impl<'de> Deserialize<'de> for InvokeCommand {
@@ -431,4 +459,88 @@ pub struct InvokeUpdateWorkspaceConfig {
 
   #[clap(long)]
   pub keep_alive: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+  use std::iter;
+
+  use clap::Parser;
+
+  use super::{AppCommand, InvokeCommand, SubscribableEvent};
+
+  /// Parses a command the way the user config does (see `Deserialize`).
+  fn parse(command: &str) -> InvokeCommand {
+    InvokeCommand::try_parse_from(
+      iter::once("").chain(command.split_whitespace()),
+    )
+    .expect("command should parse")
+  }
+
+  #[test]
+  fn emit_takes_name_and_words() {
+    assert_eq!(
+      parse("emit omawin launcher clipboard"),
+      InvokeCommand::Emit {
+        name: "omawin".into(),
+        args: vec!["launcher".into(), "clipboard".into()],
+      }
+    );
+  }
+
+  #[test]
+  fn emit_takes_a_name_alone() {
+    assert_eq!(
+      parse("emit omawin"),
+      InvokeCommand::Emit {
+        name: "omawin".into(),
+        args: vec![],
+      }
+    );
+  }
+
+  #[test]
+  fn emit_passes_flags_through() {
+    assert_eq!(
+      parse("emit omawin --open install -x"),
+      InvokeCommand::Emit {
+        name: "omawin".into(),
+        args: vec!["--open".into(), "install".into(), "-x".into()],
+      }
+    );
+  }
+
+  #[test]
+  fn emit_needs_a_name() {
+    assert!(InvokeCommand::try_parse_from(["", "emit"]).is_err());
+  }
+
+  #[test]
+  fn emit_parses_from_the_config() {
+    let command: InvokeCommand =
+      serde_json::from_str("\"emit omawin launcher audio\"")
+        .expect("config command should parse");
+
+    assert_eq!(command, parse("emit omawin launcher audio"));
+  }
+
+  #[test]
+  fn custom_events_can_be_subscribed_to() {
+    let command =
+      AppCommand::try_parse_from(["glazewm", "sub", "--events", "custom"])
+        .expect("sub should parse");
+
+    assert!(matches!(
+      command,
+      AppCommand::Sub { events } if events == vec![SubscribableEvent::Custom]
+    ));
+  }
+
+  #[test]
+  fn only_pause_and_emit_run_while_paused() {
+    assert!(parse("wm-toggle-pause").runs_while_paused());
+    assert!(parse("emit omawin launcher").runs_while_paused());
+    assert!(!parse("close").runs_while_paused());
+    assert!(!parse("shell-exec omawin.exe launcher").runs_while_paused());
+  }
 }

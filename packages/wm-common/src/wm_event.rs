@@ -63,4 +63,33 @@ pub enum WmEvent {
   PauseChanged {
     is_paused: bool,
   },
+  /// A custom event from the `emit` command.
+  Custom {
+    /// Name of the event; subscribers filter on it.
+    name: String,
+    /// Words passed along with the event.
+    args: Vec<String>,
+  },
+}
+
+#[cfg(test)]
+mod tests {
+  use super::WmEvent;
+
+  #[test]
+  fn custom_event_serializes_for_subscribers() {
+    let event = WmEvent::Custom {
+      name: "omawin".into(),
+      args: vec!["launcher".into(), "clipboard".into()],
+    };
+
+    assert_eq!(
+      serde_json::to_value(&event).expect("event should serialize"),
+      serde_json::json!({
+        "eventType": "custom",
+        "name": "omawin",
+        "args": ["launcher", "clipboard"],
+      })
+    );
+  }
 }

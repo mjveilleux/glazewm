@@ -23,7 +23,7 @@ use crate::{
       toggle_tiling_direction,
     },
     general::{
-      cycle_focus, disable_binding_mode, enable_binding_mode,
+      cycle_focus, disable_binding_mode, emit, enable_binding_mode,
       platform_sync, reload_config, shell_exec, toggle_pause,
     },
     monitor::focus_monitor,
@@ -344,8 +344,9 @@ impl WindowManager {
     state: &mut WmState,
     config: &mut UserConfig,
   ) -> anyhow::Result<()> {
-    // No-op if WM is currently paused.
-    if state.is_paused && *command != InvokeCommand::WmTogglePause {
+    // No-op if WM is currently paused, except for commands that must
+    // still work then.
+    if state.is_paused && !command.runs_while_paused() {
       return Ok(());
     }
 
@@ -385,6 +386,10 @@ impl WindowManager {
           }
           _ => Ok(()),
         }
+      }
+      InvokeCommand::Emit { name, args } => {
+        emit(name, args, state);
+        Ok(())
       }
       InvokeCommand::Focus(args) => {
         if let Some(direction) = &args.direction {

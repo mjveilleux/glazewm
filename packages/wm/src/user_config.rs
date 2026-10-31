@@ -354,8 +354,9 @@ impl UserConfig {
   /// Keybinding configs that should be active for the current binding mode
   /// and pause state.
   ///
-  /// When paused, only the configs with `InvokeCommand::WmTogglePause` are
-  /// returned so that unpausing remains possible.
+  /// When paused, only the configs with a command that runs while paused
+  /// (see `InvokeCommand::runs_while_paused`) are returned, so that
+  /// unpausing remains possible and keys bound to `emit` keep working.
   pub fn active_keybinding_configs(
     &self,
     binding_modes: &[wm_common::BindingModeConfig],
@@ -369,12 +370,11 @@ impl UserConfig {
     .clone();
 
     source_configs.into_iter().filter(move |kb| {
-      if is_paused {
-        kb.commands
-          .contains(&wm_common::InvokeCommand::WmTogglePause)
-      } else {
-        true
-      }
+      !is_paused
+        || kb
+          .commands
+          .iter()
+          .any(wm_common::InvokeCommand::runs_while_paused)
     })
   }
 }

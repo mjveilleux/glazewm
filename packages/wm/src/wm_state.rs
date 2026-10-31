@@ -566,10 +566,15 @@ impl WmState {
   /// Does not emit events while the WM is paused or populating initial
   /// state. This is to prevent events (e.g. workspace activation events)
   /// from being emitted via IPC server before the initial state is
-  /// prepared.
+  /// prepared. Pause changes and custom events (`emit`) pass while
+  /// paused, so keys bound to `emit` keep working.
   pub fn emit_event(&self, event: WmEvent) {
     if self.has_initialized
-      && (!self.is_paused || matches!(event, WmEvent::PauseChanged { .. }))
+      && (!self.is_paused
+        || matches!(
+          event,
+          WmEvent::PauseChanged { .. } | WmEvent::Custom { .. }
+        ))
     {
       if let Err(err) = self.event_tx.send(event) {
         warn!("Failed to send event: {}", err);
