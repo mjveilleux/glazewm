@@ -131,6 +131,16 @@ foreach ($key in $consent, "$consent\NonPackaged") {
     Set-ItemProperty -Path $key -Name Value -Value 'Allow'
 }
 
+# Windows' Animation effects setting (Settings > Accessibility > Visual effects), which GlazeWM
+# follows: on, or nothing would animate. Servers may have it off.
+Add-Type -Namespace Spi -Name Native -MemberDefinition @'
+[DllImport("user32.dll", SetLastError = true)]
+public static extern bool SystemParametersInfo(uint action, uint param, IntPtr value, uint winIni);
+'@
+# SPI_SETCLIENTAREAANIMATION (0x1043): the value itself is the pointer argument. Sent to running
+# apps (SPIF_SENDCHANGE, 2) without saving it to the profile.
+if (-not [Spi.Native]::SystemParametersInfo(0x1043, 0, [IntPtr]1, 2)) { Write-Host 'Could not turn Animation effects on.' }
+
 Write-Event 'start glazewm'
 Write-Host "session $([Diagnostics.Process]::GetCurrentProcess().SessionId), interactive $([Environment]::UserInteractive), explorer $([bool](Get-Process explorer -ErrorAction SilentlyContinue))"
 $wm = Start-Process $glazewm -ArgumentList 'start', '--config', "`"$config`"", '--verbose' -PassThru `
