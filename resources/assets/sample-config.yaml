@@ -55,34 +55,51 @@ gaps:
     left: '20px'
 
 # *Experimental* animation support!
-# Uncomment to enable window move/open animations.
+# Window animations, set up like Hyprland's: a tree of nodes where a child
+# takes whatever it leaves out from its parent.
 #
-# `effect_type` is either 'slide' (a snapshot of the window moves from its
-# old position to the new one) or 'fade' (the window is placed while
-# invisible, then fades in; Windows only). Fading new windows in avoids
-# seeing them first at the position the app opened them at.
+#   windows ─┬─ windows_in    (new windows appearing)
+#            ├─ windows_out   (windows closed with the `close` command)
+#            └─ windows_move  (windows moving or resizing)
+#   fade ─┬─ fade_in          (opacity of windows appearing; without `fade`,
+#         └─ fade_out          it follows the window's own animation)
+#
+# A node animates once it or its parent is set, unless `enabled: false`.
+# Each node takes `duration_ms`, `easing`, `style` and, for `popin`,
+# `popin_percent` (the size it grows from or shrinks to).
+#
+# Styles: 'slide' (a snapshot of the window moves to the new spot), 'fade'
+# (placed while invisible, then fades in), 'popin' (grows in, or shrinks
+# out, while fading), and 'move' (the live window moves each frame;
+# choppier than 'slide'). 'fade', 'popin' and 'move' are Windows only.
 #
 # Easings: 'linear', 'ease_in', 'ease_out', 'ease_in_out', 'ease_in_cubic',
-# 'ease_out_cubic', 'ease_in_out_cubic' and 'ease_out_quint'.
+# 'ease_out_cubic', 'ease_in_out_cubic', 'ease_out_quint', or a curve of
+# your own under `beziers` (`[x1, y1, x2, y2]`, as CSS `cubic-bezier`; y
+# may leave 0-1 to overshoot).
 #
-# `window_close` plays for windows closed with the `close` command (Windows
-# only): 'fade' fades a snapshot of the window out, 'popin' also shrinks it
-# a little. `enabled: false` turns every animation off, keeping the rest.
+# Animations follow Windows' "Animation effects" setting. `enabled: false`
+# turns every animation off, keeping the rest.
 animations:
   # enabled: true
-  # window_move:
-  #   effect_type: 'slide'
+  # beziers:
+  #   snappy: [0.05, 0.9, 0.1, 1.05]
+  # windows:
   #   duration_ms: 180
-  #   easing: 'ease_out_quint'
+  #   easing: 'snappy'
+  # windows_in:
+  #   style: 'popin'
+  #   popin_percent: 87
+  # windows_out:
+  #   style: 'popin'
+  #   popin_percent: 95
+  #   duration_ms: 160
+  # windows_move:
+  #   style: 'slide'
   #   trigger_threshold: '10px'
-  # window_open:
-  #   effect_type: 'fade'
+  # fade:
   #   duration_ms: 150
   #   easing: 'ease_out_cubic'
-  # window_close:
-  #   effect_type: 'popin'
-  #   duration_ms: 160
-  #   easing: 'ease_out_quint'
 
 window_effects:
   # Visual effects to apply to the focused window.
