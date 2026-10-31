@@ -1,0 +1,35 @@
+name: omawin release
+
+# Publishes omawin's GlazeWM (scripts/omawin-release.ps1) from a Windows runner, so a release
+# doesn't wait on a Windows PC. By hand only: omawin's install and tools bundle take the newest
+# release, so each one reaches every new omawin install.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The release's version, e.g. 3.10.1-omawin.10 (tagged v<version>).
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@21dc36fb71dd22e3317045c0c31a3f4249868b17
+        with:
+          toolchain: nightly
+
+      - uses: swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3
+        with:
+          shared-key: omawin-release-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build and publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/omawin-release.ps1 -Version '${{ inputs.version }}'
