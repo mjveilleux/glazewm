@@ -102,6 +102,53 @@ pub struct SlideRequest {
   pub effect: ResolvedEffect,
   pub target_rect: Rect,
   pub frame_rate: u32,
+
+  /// Where the snapshot starts, for a window that isn't sliding yet; its
+  /// current frame if `None`. A window already sliding always continues
+  /// from where it is.
+  pub start_rect: Option<Rect>,
+
+  /// What the snapshot is drawn within (e.g. its monitor, during a
+  /// workspace switch); the union of its start and target if `None`.
+  pub bounds: Option<Rect>,
+
+  /// Opacity of the snapshot, from and to; opaque if `None`. A window
+  /// already sliding starts from the opacity it has.
+  pub opacity: Option<(f32, f32)>,
+}
+
+impl SlideRequest {
+  /// A plain slide of `window` from where it is to `target_rect`.
+  pub fn new(
+    window: WindowContainer,
+    effect: ResolvedEffect,
+    target_rect: Rect,
+    frame_rate: u32,
+  ) -> Self {
+    Self {
+      window,
+      effect,
+      target_rect,
+      frame_rate,
+      start_rect: None,
+      bounds: None,
+      opacity: None,
+    }
+  }
+}
+
+/// A slide whose overlay is ready, waiting to start with the others
+/// prepared alongside it (see `AnimationManager::prepare_slides`).
+struct PreparedSlide {
+  window: WindowContainer,
+  clock: AnimationClock,
+
+  /// Where it starts; `None` to continue a running slide from where it
+  /// is when it starts.
+  start_rect: Option<Rect>,
+  target_rect: Rect,
+  bounds: Option<Rect>,
+  opacity: Option<(f32, f32)>,
 }
 
 /// Timing shared by every kind of animation.
@@ -196,6 +243,9 @@ struct SlideState {
   /// Start and target positions for the animation.
   start_rect: Rect,
   target_rect: Rect,
+
+  /// Opacity of the snapshot, from and to, if it changes.
+  opacity: Option<(f32, f32)>,
 }
 
 impl SlideState {
@@ -204,6 +254,14 @@ impl SlideState {
   #[cfg_attr(target_os = "windows", allow(dead_code))]
   fn current_rect(&self) -> Rect {
     self.rect_at(Instant::now())
+  }
+
+  /// Returns the snapshot's opacity at `at`, if it changes.
+  fn opacity_at(&self, at: Instant) -> Option<f32> {
+    self.opacity.map(|(from, to)| {
+      (from + (to - from) * self.clock.eased_progress_at(at))
+        .clamp(0.0, 1.0)
+    })
   }
 
   /// Returns the interpolated rect at `at`.
@@ -342,6 +400,9 @@ pub struct AnimationManager {
   /// Per-window overlay windows for slides, keyed by window ID.
   windows: HashMap<Uuid, AnimationWindow>,
 
+  /// Slides ready to start together (see `prepare_slides`).
+  prepared: Vec<PreparedSlide>,
+
   /// Close animations of windows already gone. Kept apart from the
   /// per-window maps: the window is unmanaged while its snapshot still
   /// fades, so nothing done to a window ID touches them.
@@ -388,6 +449,7 @@ impl AnimationManager {
       tick_tx,
       tick_rx,
       windows: HashMap::new(),
+      prepared: Vec::new(),
       closes: Vec::new(),
       context: None,
       #[cfg(not(target_os = "windows"))]
@@ -850,10 +912,13 @@ impl AnimationManager {
           })
         }
       }
-      // Off Windows, nothing animates.
+      // Off Windows, nothing animates. Workspace styles never reach
+      // windows (`AnimationsConfig::resolve` refuses them).
       AnimationEffect::Fade
       | AnimationEffect::Move
-      | AnimationEffect::Popin => None,
+      | AnimationEffect::Popin
+      | AnimationEffect::SlideVert
+      | AnimationEffect::SlideFade => None,
     }
   }
 
@@ -1061,128 +1126,206 @@ impl AnimationManager {
     self.update_ticking();
   }
 
-  /// Starts or extends slide animations for several windows at once.
+  /// Gets slides ready to start, for windows not sliding yet or slides
+  /// to turn towards a new target: captures the windows not sliding yet
+  /// (together, so their captures run in parallel), without starting
+  /// anything. [`AnimationManager::start_prepared_slides`] then starts
+  /// every prepared slide on the same frame, e.g. a workspace switch's
+  /// windows leaving with those arriving, captured later.
   ///
-  /// Overlays for windows that weren't already sliding are created
-  /// together, so their screen captures run in parallel.
-  ///
-  /// Returns the IDs of windows whose slide is running. The caller should
-  /// hide these windows at their target position.
-  pub fn start_slides(
+  /// Returns the IDs of the windows whose slide is ready. The caller
+  /// should hide these windows at their target position once their slides
+  /// start.
+  pub fn prepare_slides(
     &mut self,
     requests: Vec<SlideRequest>,
     dispatcher: &Dispatcher,
   ) -> HashSet<Uuid> {
-    let mut started = HashSet::new();
+    let mut ready = HashSet::new();
 
     if requests.is_empty() || !self.ensure_context(dispatcher) {
-      return started;
+      return ready;
     }
 
-    // A slide already running turns towards its new target from where it
-    // is when the change shows: on the compositor's next frame.
-    let retarget_at = self.next_frame_time(dispatcher);
-
-    let mut retargeted = Vec::new();
     let mut new_slides = Vec::new();
 
     for request in requests {
       let window_id = request.window.id();
 
-      // A slide replaces a fade, continuing from the window's current
-      // spot. The window stays hidden until the slide completes.
+      // A slide replaces a fade. The window stays hidden until the slide
+      // completes.
       self.fades.remove(&window_id);
 
-      let start_rect = self.slides.get(&window_id).map_or_else(
-        || request.window.native_properties().frame.clone(),
-        |slide| slide.rect_at(retarget_at),
-      );
+      let running = self.windows.contains_key(&window_id);
 
-      let mut slide = SlideState {
+      let start_rect = if running {
+        None
+      } else {
+        Some(
+          request
+            .start_rect
+            .clone()
+            .unwrap_or_else(|| request.window.native_properties().frame),
+        )
+      };
+
+      let prepared = PreparedSlide {
         clock: AnimationClock::new(
           &request.effect.timing,
           request.frame_rate,
         ),
         start_rect,
         target_rect: request.target_rect,
+        bounds: request.bounds,
+        opacity: request.opacity,
+        window: request.window,
       };
 
-      let outer_rect =
-        self.outer_rect(&request.window, &slide, dispatcher);
-
-      match self.windows.get_mut(&window_id) {
-        Some(overlay) => match overlay.resize(&outer_rect) {
-          Ok(()) => {
-            slide.clock.start_time = retarget_at;
-            self.slides.insert(window_id, slide);
-            retargeted.push(window_id);
-          }
-          Err(err) => {
-            tracing::warn!("Failed to retarget slide animation: {err}");
-            self.cancel_animation(&window_id);
-          }
-        },
-        None => new_slides.push((request.window, slide, outer_rect)),
+      if running {
+        ready.insert(window_id);
+        self.prepared.push(prepared);
+      } else {
+        new_slides.push(prepared);
       }
     }
 
-    started.extend(self.draw_slides(&retargeted, retarget_at, dispatcher));
+    if new_slides.is_empty() {
+      return ready;
+    }
 
-    if !new_slides.is_empty() {
-      let overlays = {
-        let natives = new_slides
-          .iter()
-          .map(|(window, _, _)| window.native().clone())
-          .collect::<Vec<_>>();
+    let natives = new_slides
+      .iter()
+      .map(|slide| slide.window.native().clone())
+      .collect::<Vec<_>>();
 
-        let overlay_requests = new_slides
-          .iter()
-          .zip(&natives)
-          .map(|((_, slide, outer_rect), native)| AnimationWindowRequest {
-            window: native,
-            inner_rect: slide.start_rect.clone(),
-            outer_rect: outer_rect.clone(),
-            opacity: None,
-          })
-          .collect::<Vec<_>>();
+    let overlay_requests = new_slides
+      .iter()
+      .zip(&natives)
+      .map(|(slide, native)| {
+        let start_rect = slide
+          .start_rect
+          .clone()
+          .unwrap_or_else(|| slide.target_rect.clone());
 
-        match &self.context {
-          Some(context) => AnimationWindow::new_many(
-            context,
-            &overlay_requests,
+        AnimationWindowRequest {
+          window: native,
+          outer_rect: self.outer_rect(
+            &slide.window,
+            &start_rect,
+            &slide.target_rect,
+            slide.bounds.as_ref(),
             dispatcher,
           ),
-          None => Vec::new(),
+          inner_rect: start_rect,
+          opacity: slide.opacity.map(|(from, _)| OpacityValue(from)),
         }
+      })
+      .collect::<Vec<_>>();
+
+    let overlays = match &self.context {
+      Some(context) => {
+        AnimationWindow::new_many(context, &overlay_requests, dispatcher)
+      }
+      None => Vec::new(),
+    };
+
+    for (slide, overlay) in new_slides.into_iter().zip(overlays) {
+      match overlay {
+        Ok(overlay) => {
+          ready.insert(slide.window.id());
+          self.windows.insert(slide.window.id(), overlay);
+          self.prepared.push(slide);
+        }
+        Err(err) => {
+          tracing::warn!("Failed to create animation window: {err}");
+        }
+      }
+    }
+
+    ready
+  }
+
+  /// Starts every slide prepared by [`AnimationManager::prepare_slides`],
+  /// on the compositor's next frame. Slides already running turn towards
+  /// their new target from where they are on that frame.
+  ///
+  /// Returns the IDs of windows whose slide is running.
+  pub fn start_prepared_slides(
+    &mut self,
+    dispatcher: &Dispatcher,
+  ) -> HashSet<Uuid> {
+    let prepared = std::mem::take(&mut self.prepared);
+
+    if prepared.is_empty() {
+      return HashSet::new();
+    }
+
+    let start_at = self.next_frame_time(dispatcher);
+    let mut window_ids = Vec::new();
+
+    for mut slide in prepared {
+      let window_id = slide.window.id();
+      let running = self.slides.get(&window_id);
+
+      let start_rect = slide.start_rect.clone().unwrap_or_else(|| {
+        running.map_or_else(
+          || slide.target_rect.clone(),
+          |running| running.rect_at(start_at),
+        )
+      });
+
+      // A running slide's snapshot continues from its opacity.
+      let opacity = match (slide.opacity, running) {
+        (Some((from, to)), Some(running)) => {
+          Some((running.opacity_at(start_at).unwrap_or(from), to))
+        }
+        (None, Some(running)) => running
+          .opacity_at(start_at)
+          .filter(|opacity| (opacity - 1.0).abs() > f32::EPSILON)
+          .map(|opacity| (opacity, 1.0)),
+        (opacity, None) => opacity,
       };
 
-      // Started once the overlays are up, so captures don't eat into the
-      // animation.
-      let start_at = self.next_frame_time(dispatcher);
-      let mut created = Vec::new();
+      let outer_rect = self.outer_rect(
+        &slide.window,
+        &start_rect,
+        &slide.target_rect,
+        slide.bounds.as_ref(),
+        dispatcher,
+      );
 
-      for ((window, mut slide, _), overlay) in
-        new_slides.into_iter().zip(overlays)
-      {
-        match overlay {
-          Ok(overlay) => {
-            slide.clock.start_time = start_at;
-            self.windows.insert(window.id(), overlay);
-            self.slides.insert(window.id(), slide);
-            created.push(window.id());
-          }
-          Err(err) => {
-            tracing::warn!("Failed to create animation window: {err}");
-          }
+      if slide.start_rect.is_none() {
+        let resized = self
+          .windows
+          .get_mut(&window_id)
+          .map(|overlay| overlay.resize(&outer_rect));
+
+        if let Some(Err(err)) = resized {
+          tracing::warn!("Failed to retarget slide animation: {err}");
+          self.cancel_animation(&window_id);
+          continue;
         }
       }
 
-      started.extend(self.draw_slides(&created, start_at, dispatcher));
+      slide.clock.start_time = start_at;
+
+      self.slides.insert(
+        window_id,
+        SlideState {
+          clock: slide.clock,
+          start_rect,
+          target_rect: slide.target_rect,
+          opacity,
+        },
+      );
+
+      window_ids.push(window_id);
     }
 
+    let started = self.draw_slides(&window_ids, start_at, dispatcher);
     self.update_ticking();
 
-    started
+    started.into_iter().collect()
   }
 
   /// Draws the slides of the given windows, in one compositor
@@ -1218,12 +1361,22 @@ impl AnimationManager {
                   to: slide.target_rect.clone(),
                   curve: slide.clock.curve(),
                 },
-                opacity: None,
+                opacity: slide.opacity.map(|(from, to)| AnimatedValue {
+                  from: OpacityValue(from),
+                  to: OpacityValue(to),
+                  curve: slide.clock.curve(),
+                }),
                 scale: None,
               })?;
 
               #[cfg(not(target_os = "windows"))]
-              overlay.update(&slide.current_rect(), None)?;
+              overlay.update(
+                &slide.current_rect(),
+                slide
+                  .opacity_at(Instant::now())
+                  .map(OpacityValue)
+                  .as_ref(),
+              )?;
             }
 
             anyhow::Ok(())
@@ -1303,8 +1456,8 @@ impl AnimationManager {
     self.update_ticking();
   }
 
-  /// Gets the bounds of the overlay for a slide: the union of its start
-  /// and target rects.
+  /// Gets the bounds of the overlay for a slide: `bounds` if given, else
+  /// the union of its start and target rects.
   // LINT: `self` is only used on macOS.
   #[cfg_attr(not(target_os = "macos"), allow(clippy::unused_self))]
   fn outer_rect(
@@ -1312,11 +1465,15 @@ impl AnimationManager {
     // LINT: `window` and `dispatcher` are only used on macOS.
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     window: &WindowContainer,
-    slide: &SlideState,
+    start_rect: &Rect,
+    target_rect: &Rect,
+    bounds: Option<&Rect>,
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     dispatcher: &Dispatcher,
   ) -> Rect {
-    let outer_rect = slide.start_rect.union(&slide.target_rect);
+    let outer_rect = bounds
+      .cloned()
+      .unwrap_or_else(|| start_rect.union(target_rect));
 
     // On macOS, windows cannot span across multiple displays when
     // "Displays have separate Spaces" is enabled. Attempting to position a
@@ -1511,6 +1668,7 @@ mod tests {
       timing: timing(200, Easing::default()),
       fade: None,
       popin_scale: 0.9,
+      slide_fraction: 1.0,
     };
 
     assert!(AnimationClock::for_fade(&effect, 60).is_complete());
@@ -1522,6 +1680,7 @@ mod tests {
       clock: clock(500, 200),
       start_rect: Rect::from_xy(0, 0, 100, 100),
       target_rect: Rect::from_xy(200, 50, 300, 400),
+      opacity: None,
     };
 
     assert_eq!(slide.current_rect(), slide.target_rect);
@@ -1533,6 +1692,7 @@ mod tests {
       clock: clock(0, 200),
       start_rect: Rect::from_xy(0, 0, 100, 100),
       target_rect: Rect::from_xy(500, 0, 100, 100),
+      opacity: None,
     };
 
     // Starts on a frame 16 ms from now.
@@ -1562,6 +1722,7 @@ mod tests {
         ),
         start_rect: Rect::from_xy(0, 0, 20, 20),
         target_rect: Rect::from_xy(0, 0, 400, 400),
+        opacity: None,
       };
 
       let rect = slide.current_rect();

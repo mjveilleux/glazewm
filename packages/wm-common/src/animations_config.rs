@@ -106,6 +106,10 @@ pub struct AnimationNode {
 
   /// For `windows_move`: the smallest move that animates, in pixels.
   pub trigger_threshold: Option<LengthValue>,
+
+  /// For `slidefade`: how far workspaces slide, in percent of the
+  /// monitor (the rest is a fade).
+  pub slide_percent: Option<f32>,
 }
 
 /// Duration and curve of an animation.
@@ -130,6 +134,11 @@ pub struct ResolvedEffect {
   /// For `popin`: the size a window appearing starts at, or a window
   /// leaving ends at, relative to its own (`1.0`).
   pub popin_scale: f32,
+
+  /// For workspaces: how far they slide, relative to the monitor (`1.0`
+  /// for `slide` and `slidevert`, `slide_percent` for `slidefade`, `0.0`
+  /// for `fade`).
+  pub slide_fraction: f32,
 }
 
 /// The move animation's settings, with every inherited value filled in.
@@ -167,6 +176,10 @@ const DEFAULT_POPIN_IN_PERCENT: f32 = 87.0;
 /// Size a window leaving with `popin` ends at, in percent (Omarchy's
 /// `windowsOut`, `popin 95%`).
 const DEFAULT_POPIN_OUT_PERCENT: f32 = 95.0;
+
+/// How far workspaces slide with `slidefade`, in percent of the monitor
+/// (Hyprland's `slidefade 20%`).
+const DEFAULT_SLIDE_FADE_PERCENT: f32 = 20.0;
 
 impl AnimationsConfig {
   /// Every animation's settings, as worked out by
@@ -226,20 +239,7 @@ impl AnimationsConfig {
       DEFAULT_POPIN_OUT_PERCENT,
     )?;
 
-    if let Some(out) = &windows_out {
-      if !matches!(
-        out.style,
-        AnimationEffect::Fade | AnimationEffect::Popin
-      ) {
-        bail!("`animations.windows_out.style` must be 'fade' or 'popin'.");
-      }
-    }
-
     let windows_move = resolver.movement()?;
-
-    let border = resolver
-      .timing("border", None)?
-      .filter(|_| resolver.is_enabled("border", None));
 
     let workspaces_in = resolver.effect(
       "workspaces_in",
@@ -256,6 +256,21 @@ impl AnimationsConfig {
       AnimationEffect::Slide,
       100.0,
     )?;
+
+    check_styles(&[
+      ("windows_in", windows_in.as_ref()),
+      ("windows_out", windows_out.as_ref()),
+      (
+        "windows_move",
+        windows_move.as_ref().map(|movement| &movement.effect),
+      ),
+      ("workspaces_in", workspaces_in.as_ref()),
+      ("workspaces_out", workspaces_out.as_ref()),
+    ])?;
+
+    let border = resolver
+      .timing("border", None)?
+      .filter(|_| resolver.is_enabled("border", None));
 
     let mut deprecated_keys = Vec::new();
 
@@ -340,6 +355,12 @@ impl AnimationsConfig {
           );
         }
 
+        if node.slide_percent.is_some_and(|percent| {
+          !percent.is_finite() || !(0.0..=100.0).contains(&percent)
+        }) {
+          bail!("`animations.{key}.slide_percent` must be from 0 to 100.");
+        }
+
         tree.insert(key, node.clone());
       }
     }
@@ -378,6 +399,39 @@ impl AnimationsConfig {
 
     Ok(tree)
   }
+}
+
+/// Checks that each node's style is one it can play: a window leaving
+/// only fades or pops out, workspaces only slide or fade, and windows
+/// can't use the workspace-only styles.
+fn check_styles(
+  effects: &[(&str, Option<&ResolvedEffect>)],
+) -> anyhow::Result<()> {
+  for (key, effect) in effects {
+    let Some(style) = effect.map(|effect| &effect.style) else {
+      continue;
+    };
+
+    if key.starts_with("workspaces") {
+      if !style.is_for_workspaces() {
+        bail!(
+          "`animations.{key}.style` must be 'slide', 'slidevert', 'fade' or \
+           'slidefade'."
+        );
+      }
+    } else if style.is_for_workspaces_only() {
+      bail!(
+        "`animations.{key}.style`: 'slidevert' and 'slidefade' are for \
+         workspaces."
+      );
+    } else if *key == "windows_out"
+      && !matches!(style, AnimationEffect::Fade | AnimationEffect::Popin)
+    {
+      bail!("`animations.windows_out.style` must be 'fade' or 'popin'.");
+    }
+  }
+
+  Ok(())
 }
 
 /// Works out nodes' settings from the tree.
@@ -550,13 +604,27 @@ impl Resolver<'_> {
       .setting(key, parent, |node| node.popin_percent)
       .unwrap_or(default_popin_percent);
 
+    let style = self
+      .setting(key, parent, |node| node.style.clone())
+      .unwrap_or(default_style);
+
+    let slide_fraction = match style {
+      AnimationEffect::Fade => 0.0,
+      AnimationEffect::SlideFade => {
+        self
+          .setting(key, parent, |node| node.slide_percent)
+          .unwrap_or(DEFAULT_SLIDE_FADE_PERCENT)
+          / 100.0
+      }
+      _ => 1.0,
+    };
+
     Ok(Some(ResolvedEffect {
-      style: self
-        .setting(key, parent, |node| node.style.clone())
-        .unwrap_or(default_style),
+      style,
       timing,
       fade,
       popin_scale: popin_percent / 100.0,
+      slide_fraction,
     }))
   }
 }
@@ -604,6 +672,7 @@ impl AnimationEffectConfig {
       style: Some(self.effect_type.clone()),
       popin_percent: None,
       trigger_threshold,
+      slide_percent: None,
     }
   }
 }
@@ -650,6 +719,39 @@ pub enum AnimationEffect {
   ///
   /// - **macOS**: Not supported; the window moves without animation.
   Popin,
+
+  /// For workspaces: like `slide`, but up and down.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Not supported; workspaces switch without animation.
+  #[serde(rename = "slidevert")]
+  SlideVert,
+
+  /// For workspaces: slides `slide_percent` of the monitor while fading.
+  ///
+  /// # Platform-specific
+  ///
+  /// - **macOS**: Not supported; workspaces switch without animation.
+  #[serde(rename = "slidefade")]
+  SlideFade,
+}
+
+impl AnimationEffect {
+  /// Whether the style can animate a workspace switch.
+  #[must_use]
+  pub fn is_for_workspaces(&self) -> bool {
+    matches!(
+      self,
+      Self::Slide | Self::SlideVert | Self::Fade | Self::SlideFade
+    )
+  }
+
+  /// Whether the style only animates workspace switches.
+  #[must_use]
+  pub fn is_for_workspaces_only(&self) -> bool {
+    matches!(self, Self::SlideVert | Self::SlideFade)
+  }
 }
 
 #[cfg(test)]
@@ -843,6 +945,30 @@ mod tests {
 
     error(r#"{ "windows_in": { "popin_percent": 0 } }"#);
     error(r#"{ "windows_in": { "popin_percent": 120 } }"#);
+  }
+
+  #[test]
+  fn workspace_styles() {
+    let config = ok(
+      r#"{ "workspaces": { "style": "slidefade", "slide_percent": 30 }, "workspaces_in": { "style": "slidevert" } }"#,
+    );
+    let resolved = config.resolved();
+
+    let out = resolved.workspaces_out.as_ref().expect("out");
+    assert_eq!(out.style, AnimationEffect::SlideFade);
+    assert!((out.slide_fraction - 0.3).abs() < f32::EPSILON);
+
+    let r#in = resolved.workspaces_in.as_ref().expect("in");
+    assert_eq!(r#in.style, AnimationEffect::SlideVert);
+    assert!((r#in.slide_fraction - 1.0).abs() < f32::EPSILON);
+
+    let fade = ok(r#"{ "workspaces": { "style": "fade" } }"#);
+    let fade_in = fade.resolved().workspaces_in.as_ref().expect("in");
+    assert!(fade_in.slide_fraction.abs() < f32::EPSILON);
+
+    error(r#"{ "workspaces": { "style": "popin" } }"#);
+    error(r#"{ "windows_move": { "style": "slidevert" } }"#);
+    error(r#"{ "workspaces": { "slide_percent": 120 } }"#);
   }
 
   #[test]

@@ -7,6 +7,7 @@ use crate::{
     container::set_focused_descendant, workspace::deactivate_workspace,
   },
   models::WorkspaceTarget,
+  pending_sync::WorkspaceSwitch,
   traits::CommonGetters,
   user_config::UserConfig,
   wm_state::WmState,
@@ -65,12 +66,30 @@ pub fn focus_workspace(
     set_focused_descendant(&container_to_focus, None);
     state.pending_sync.queue_focus_change();
 
-    // Display the workspace to switch focus to.
+    // Display the workspace to switch focus to. Windows don't move within
+    // their workspace, so moves aren't animated; the switch itself is
+    // (see `WorkspaceSwitch`), sliding towards the workspace's place in
+    // the monitor's order.
+    if displayed_workspace.id() != target_workspace.id() {
+      if let Some(monitor) = target_workspace.monitor() {
+        // LINT: Workspace counts are tiny.
+        #[allow(
+          clippy::cast_possible_truncation,
+          clippy::cast_possible_wrap
+        )]
+        let direction = (target_workspace.index() as i32
+          - displayed_workspace.index() as i32)
+          .signum();
+
+        state.pending_sync.set_workspace_switch(WorkspaceSwitch {
+          monitor_id: monitor.id(),
+          direction,
+        });
+      }
+    }
+
     state
       .pending_sync
-      // TODO: Add animations specifically for workspace switches. For now,
-      // skip the animation since using the normal movement animation will
-      // look strange.
       .set_skip_animations(true)
       .queue_container_to_redraw(displayed_workspace)
       .queue_container_to_redraw(target_workspace);

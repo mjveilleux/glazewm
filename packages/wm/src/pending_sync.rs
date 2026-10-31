@@ -36,6 +36,20 @@ pub struct PendingSync {
 
   /// Whether to skip animations for the current sync.
   skip_animations: bool,
+
+  /// A workspace switch to animate, if the sync is one.
+  workspace_switch: Option<WorkspaceSwitch>,
+}
+
+/// A switch of the workspace shown on a monitor, to animate.
+#[derive(Clone, Debug)]
+pub struct WorkspaceSwitch {
+  /// Monitor whose workspace changes.
+  pub monitor_id: Uuid,
+
+  /// `1` if the new workspace comes after the old one, `-1` if before:
+  /// which way the workspaces slide.
+  pub direction: i32,
 }
 
 impl PendingSync {
@@ -58,6 +72,7 @@ impl PendingSync {
     self.needs_all_effects_update = false;
     self.needs_cursor_jump = false;
     self.skip_animations = false;
+    self.workspace_switch = None;
     self
   }
 
@@ -136,6 +151,20 @@ impl PendingSync {
   pub fn set_skip_animations(&mut self, skip: bool) -> &mut Self {
     self.skip_animations = skip;
     self
+  }
+
+  /// Marks the sync as a workspace switch, to animate as one.
+  pub fn set_workspace_switch(
+    &mut self,
+    switch: WorkspaceSwitch,
+  ) -> &mut Self {
+    self.workspace_switch = Some(switch);
+    self
+  }
+
+  /// The workspace switch this sync makes, if any.
+  pub fn workspace_switch(&self) -> Option<&WorkspaceSwitch> {
+    self.workspace_switch.as_ref()
   }
 
   pub fn should_skip_animations(&self) -> bool {

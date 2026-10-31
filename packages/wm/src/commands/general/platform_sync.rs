@@ -1,9 +1,11 @@
+use std::collections::HashSet;
+
 use anyhow::Context;
 #[cfg(target_os = "windows")]
 use wm_common::WindowEffectConfig;
 use wm_common::{
-  CursorJumpTrigger, DisplayState, HideCorner, HideMethod, UniqueExt,
-  WindowState, WmEvent,
+  AnimationEffect, CursorJumpTrigger, DisplayState, HideCorner,
+  HideMethod, ResolvedEffect, UniqueExt, WindowState, WmEvent,
 };
 #[cfg(target_os = "windows")]
 use wm_platform::CornerStyle;
@@ -228,6 +230,10 @@ fn redraw_containers(
   // Get monitors by their optimal hide corner.
   let monitors_by_hide_corner = state.monitors_by_hide_corner();
 
+  // A workspace switch to animate: its monitor's bounds, and the effects
+  // of the windows leaving and arriving.
+  let switch = workspace_switch_animation(state, config);
+
   let mut redraws = Vec::new();
 
   for window in windows_to_update.iter().rev() {
@@ -310,11 +316,24 @@ fn redraw_containers(
       DisplayState::Showing | DisplayState::Shown
     );
 
+    // A window leaving or arriving with an animated workspace switch.
+    let switch_role = switch
+      .as_ref()
+      .filter(|switch| switch.monitor_id == monitor.id())
+      .and_then(|_| match window.display_state() {
+        DisplayState::Hiding => Some(SwitchRole::Leaving),
+        DisplayState::Showing => Some(SwitchRole::Arriving),
+        _ => None,
+      });
+
     // Hidden windows and syncs that skip animations (e.g. workspace
     // switches, or ending finished animations) stop any running
     // animation; the window then jumps straight to its target. A visible
     // window whose slide is over gets the slide's snapshot faded into it.
-    let animation_plan = if !is_visible {
+    // Windows in an animated workspace switch slide with it instead.
+    let animation_plan = if switch_role.is_some() {
+      None
+    } else if !is_visible {
       state.animation_manager.cancel_animation(&window.id());
       None
     } else if state.pending_sync.should_skip_animations() {
@@ -347,28 +366,63 @@ fn redraw_containers(
       animation_plan,
       frame_rate: monitor.native_properties().refresh_rate.unwrap_or(60),
       hide_corner: *hide_corner,
+      switch_role,
     });
   }
 
   // Start all slides together, before any window moves, so that each
   // snapshot shows the window where it was and their captures run in
   // parallel.
-  let slide_requests = redraws
+  // Windows leaving with a workspace switch are captured now too, while
+  // still shown.
+  let mut slide_requests = redraws
     .iter()
     .filter_map(|redraw| match &redraw.animation_plan {
-      Some(AnimationPlan::Slide(effect)) => Some(SlideRequest {
-        window: redraw.window.clone(),
-        effect: effect.clone(),
-        target_rect: redraw.target_rect.clone(),
-        frame_rate: redraw.frame_rate,
-      }),
+      Some(AnimationPlan::Slide(effect)) => Some(SlideRequest::new(
+        redraw.window.clone(),
+        effect.clone(),
+        redraw.target_rect.clone(),
+        redraw.frame_rate,
+      )),
       _ => None,
     })
     .collect::<Vec<_>>();
 
-  let started_slides = state
+  if let Some(switch) = &switch {
+    slide_requests.extend(
+      redraws
+        .iter()
+        .filter(|redraw| redraw.switch_role == Some(SwitchRole::Leaving))
+        .filter_map(|redraw| switch.leaving_request(redraw)),
+    );
+  }
+
+  let mut started_slides = state
     .animation_manager
-    .start_slides(slide_requests, &state.dispatcher);
+    .prepare_slides(slide_requests, &state.dispatcher);
+
+  // Without a switch, slides start before any window moves. With one,
+  // they wait for the windows arriving, captured once they're shown.
+  if switch.is_none() {
+    started_slides = state
+      .animation_manager
+      .start_prepared_slides(&state.dispatcher);
+  }
+
+  // Windows arriving with a switch are shown at an opacity of 0, to be
+  // captured and slide in.
+  let arriving = switch.as_ref().map_or_else(Vec::new, |switch| {
+    redraws
+      .iter()
+      .filter(|redraw| redraw.switch_role == Some(SwitchRole::Arriving))
+      .filter_map(|redraw| switch.arriving_request(redraw))
+      .collect::<Vec<_>>()
+  });
+
+  let arriving_ids = arriving
+    .iter()
+    .map(|request| request.window.id())
+    .collect::<HashSet<_>>();
 
   for redraw in redraws {
     let window = &redraw.window;
@@ -399,6 +453,7 @@ fn redraw_containers(
     let opacity_change = if fade_effect.is_some()
       || is_popin
       || started_slides.contains(&window.id())
+      || arriving_ids.contains(&window.id())
     {
       OpacityChange::Hide
     } else if state.animation_manager.take_hidden(&window.id()) {
@@ -507,7 +562,204 @@ fn redraw_containers(
     }
   }
 
+  if switch.is_some() {
+    start_workspace_switch(arriving, focused_container, state, config);
+  }
+
   Ok(())
+}
+
+/// Captures the windows arriving with a workspace switch (shown by now,
+/// at an opacity of 0), and starts the switch: every window leaving and
+/// arriving slides on the same frame.
+///
+/// A window arriving that can't slide gets its opacity back at once, so
+/// it's never left invisible.
+///
+/// # Platform-specific
+///
+/// - **macOS**: Never called; workspaces switch without animation.
+// LINT: `focused_container` and `config` are only used on Windows.
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+fn start_workspace_switch(
+  arriving: Vec<SlideRequest>,
+  focused_container: &Container,
+  state: &mut WmState,
+  config: &UserConfig,
+) {
+  #[cfg(target_os = "windows")]
+  let arriving_windows = arriving
+    .iter()
+    .map(|request| request.window.clone())
+    .collect::<Vec<_>>();
+
+  state
+    .animation_manager
+    .prepare_slides(arriving, &state.dispatcher);
+
+  // LINT: Only read on Windows.
+  #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+  let started = state
+    .animation_manager
+    .start_prepared_slides(&state.dispatcher);
+
+  #[cfg(target_os = "windows")]
+  for window in arriving_windows {
+    if !started.contains(&window.id())
+      && state.animation_manager.take_hidden(&window.id())
+    {
+      let opacity = resting_opacity(
+        &window,
+        window.id() == focused_container.id(),
+        config,
+      );
+
+      if let Err(err) = window.native().set_transparency(&opacity) {
+        tracing::warn!("Failed to restore window opacity: {err}");
+      }
+    }
+  }
+}
+
+/// A window's part in an animated workspace switch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SwitchRole {
+  Leaving,
+  Arriving,
+}
+
+/// How a workspace switch animates, worked out once per sync.
+struct SwitchAnimation {
+  monitor_id: uuid::Uuid,
+
+  /// Bounds of the monitor, which the slides are drawn within.
+  monitor_rect: Rect,
+
+  /// `1` towards a later workspace, `-1` towards an earlier one.
+  direction: i32,
+
+  leaving: Option<ResolvedEffect>,
+  arriving: Option<ResolvedEffect>,
+}
+
+impl SwitchAnimation {
+  /// How far, and which way, a window arriving starts from its place:
+  /// the way the workspaces slide, `slide_fraction` of the monitor.
+  /// Leaving windows go the opposite way.
+  fn offset(&self, effect: &ResolvedEffect) -> (i32, i32) {
+    // LINT: Monitor sizes are far below the `f32` precision limit.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    let distance = |length: i32| {
+      (length as f32 * effect.slide_fraction).round() as i32
+        * self.direction
+    };
+
+    if effect.style == AnimationEffect::SlideVert {
+      (0, distance(self.monitor_rect.height()))
+    } else {
+      (distance(self.monitor_rect.width()), 0)
+    }
+  }
+
+  /// Opacity of a window's snapshot, from and to, if the style fades.
+  fn opacity(
+    effect: &ResolvedEffect,
+    arriving: bool,
+  ) -> Option<(f32, f32)> {
+    matches!(
+      effect.style,
+      AnimationEffect::Fade | AnimationEffect::SlideFade
+    )
+    .then_some(if arriving { (0.0, 1.0) } else { (1.0, 0.0) })
+  }
+
+  /// The slide of a window leaving: from where it is, out the way the
+  /// workspaces go.
+  fn leaving_request(
+    &self,
+    redraw: &PendingRedraw,
+  ) -> Option<SlideRequest> {
+    let effect = self.leaving.as_ref()?;
+    let (dx, dy) = self.offset(effect);
+
+    Some(SlideRequest {
+      bounds: Some(self.monitor_rect.clone()),
+      opacity: Self::opacity(effect, false),
+      ..SlideRequest::new(
+        redraw.window.clone(),
+        effect.clone(),
+        offset_rect(&redraw.target_rect, -dx, -dy),
+        redraw.frame_rate,
+      )
+    })
+  }
+
+  /// The slide of a window arriving: in from the way the workspaces come,
+  /// to its place.
+  fn arriving_request(
+    &self,
+    redraw: &PendingRedraw,
+  ) -> Option<SlideRequest> {
+    let effect = self.arriving.as_ref()?;
+    let (dx, dy) = self.offset(effect);
+
+    Some(SlideRequest {
+      start_rect: Some(offset_rect(&redraw.target_rect, dx, dy)),
+      bounds: Some(self.monitor_rect.clone()),
+      opacity: Self::opacity(effect, true),
+      ..SlideRequest::new(
+        redraw.window.clone(),
+        effect.clone(),
+        redraw.target_rect.clone(),
+        redraw.frame_rate,
+      )
+    })
+  }
+}
+
+/// Moves a rect by `dx` and `dy`.
+fn offset_rect(rect: &Rect, dx: i32, dy: i32) -> Rect {
+  rect.translate_to_coordinates(rect.x() + dx, rect.y() + dy)
+}
+
+/// Works out how this sync's workspace switch animates, if it's one and
+/// workspace animations are on.
+///
+/// # Platform-specific
+///
+/// - **macOS**: Always `None`; workspaces switch without animation.
+fn workspace_switch_animation(
+  state: &WmState,
+  config: &UserConfig,
+) -> Option<SwitchAnimation> {
+  if !cfg!(target_os = "windows")
+    || !wm_platform::system_animations_enabled()
+  {
+    return None;
+  }
+
+  let switch = state.pending_sync.workspace_switch()?;
+  let resolved = config.value.animations.resolved();
+
+  if switch.direction == 0
+    || (resolved.workspaces_in.is_none()
+      && resolved.workspaces_out.is_none())
+  {
+    return None;
+  }
+
+  let monitor = state
+    .monitors()
+    .into_iter()
+    .find(|monitor| monitor.id() == switch.monitor_id)?;
+
+  Some(SwitchAnimation {
+    monitor_id: switch.monitor_id,
+    monitor_rect: monitor.to_rect().ok()?,
+    direction: switch.direction,
+    leaving: resolved.workspaces_out.clone(),
+    arriving: resolved.workspaces_in.clone(),
+  })
 }
 
 /// A window to reposition, with what was decided for it before any
@@ -520,6 +772,9 @@ struct PendingRedraw {
   animation_plan: Option<AnimationPlan>,
   frame_rate: u32,
   hide_corner: HideCorner,
+
+  /// The window's part in an animated workspace switch, if any.
+  switch_role: Option<SwitchRole>,
 }
 
 /// What to do with a window's opacity when repositioning it.
