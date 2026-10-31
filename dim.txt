@@ -1,0 +1,5 @@
+1 dim over A, B focused | top to bottom: B > DIM > A > C(floating)
+2 A focused by the OS | top to bottom: A > B > DIM > C(floating)
+3 dim re-placed above A | top to bottom: B > DIM > A > C(floating)
+4 C focused | top to bottom: C(floating) > B > DIM > A
+5 A with its Find popup, dim re-placed | top to bottom: C(floating) > B > DIM > A
