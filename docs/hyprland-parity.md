@@ -195,3 +195,16 @@ CI's runner has no GPU, so Phase 2's target (p95 frame interval about one refres
 4. Read the `Compositor frames.` lines: one per run of animations, with `mean_ms`, `p95_ms`, `max_ms` and `late` (intervals over 1.5 frames), against `period_ms` (the monitor's refresh period). On a 60 Hz display, p95 should be about 16.7 ms and `late` near 0. `Animation frames.` lines with `frames=0` are runs the compositor played alone; `First animation frame.` gives `start_ms`, from the command to the first frame.
 
 If p95 stays well above the period, the logs and a short screen recording are what's needed to look into it.
+
+### The new-window flash
+
+A new window could show for a frame where its app put it before its open animation. `scripts/flash-spike.ps1` (results on `ci/flash-spike--claude-hyprland-parity`) records a test window at 60 fps, hidden different ways:
+
+| Hidden | Frames shown before the reveal |
+|---|---|
+| not at all | every one: its title bar on the first frame, then all of it |
+| by itself, before it's shown: layered alpha 0, the same with DWM's open transition off, `DWMWA_CLOAK`, or off screen | none |
+| by another process, cloaked (`DWMWA_CLOAK`) | refused: `E_ACCESSDENIED`, it only works on a process's own windows |
+| by another process when it's created, shown right away as apps do (alpha 0), 20 times | 13 of 20 flashed, 16 of 20 with the open transition off |
+
+The hook got each creation 15–32 ms late. Transparency hides a window completely, title bar included, when it's applied before DWM first draws the window; the flash is the race lost. `SetWinEventHook` out of context, the only hook that runs in GlazeWM's own process, hears of a window only after the fact, while an app shows its window right after creating it, so DWM often draws a frame first. Nothing outside the app's process can act during the creation itself, short of loading code into the app.
